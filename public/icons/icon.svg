@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#161925"/>
+      <stop offset="100%" stop-color="#0e1018"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d4a843"/>
+      <stop offset="100%" stop-color="#c07f20"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="110" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="110" fill="#d4a843" opacity="0.04"/>
+
+  <!-- Document body -->
+  <rect x="118" y="76" width="258" height="336" rx="20" fill="#d4a843" opacity="0.07"/>
+  <rect x="118" y="76" width="258" height="336" rx="20" fill="none" stroke="#d4a843" stroke-width="9" opacity="0.35"/>
+
+  <!-- Folded corner top-right -->
+  <path d="M316 76 L376 76 L376 130 Z" fill="#0e1018"/>
+  <path d="M316 76 L376 130 L316 130 Z" fill="#d4a843" opacity="0.18"/>
+  <line x1="316" y1="76" x2="376" y2="130" stroke="#d4a843" stroke-width="9" opacity="0.35"/>
+
+  <!-- Text lines -->
+  <rect x="158" y="168" width="156" height="13" rx="6.5" fill="url(#gold)"/>
+  <rect x="158" y="204" width="136" height="10" rx="5" fill="#d4a843" opacity="0.55"/>
+  <rect x="158" y="232" width="148" height="10" rx="5" fill="#d4a843" opacity="0.55"/>
+  <rect x="158" y="260" width="120" height="10" rx="5" fill="#d4a843" opacity="0.38"/>
+  <rect x="158" y="288" width="140" height="10" rx="5" fill="#d4a843" opacity="0.38"/>
+  <rect x="158" y="316" width="110" height="10" rx="5" fill="#d4a843" opacity="0.25"/>
+
+  <!-- AI sparkle badge (bottom-right) -->
+  <circle cx="362" cy="356" r="58" fill="#0e1018"/>
+  <circle cx="362" cy="356" r="50" fill="url(#gold)"/>
+
+  <!-- Star/sparkle paths inside badge -->
+  <path d="M362 316 L368 344 L396 350 L368 356 L362 384 L356 356 L328 350 L356 344 Z"
+        fill="#0e1018" opacity="0.85"/>
+</svg>

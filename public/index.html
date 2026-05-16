@@ -1,0 +1,2301 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Gerador de Provas com IA</title>
+
+<!-- PWA -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#d4a843">
+<meta name="mobile-web-app-capable" content="yes">
+<!-- iOS Safari -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ProvasIA">
+<link rel="apple-touch-icon" href="/icons/icon.svg">
+<!-- MS Tiles -->
+<meta name="msapplication-TileColor" content="#0e1018">
+<meta name="msapplication-TileImage" content="/icons/icon.svg">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/docx/8.5.0/docx.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<style>
+:root {
+  --ink: #0e1018; --cream: #e8e4dc; --gold: #d4a843; --gold2: #c07f20;
+  --goldlt: rgba(212,168,67,0.12); --sage: #2d6a5e; --sagelt: rgba(45,106,94,0.15);
+  --muted: rgba(232,228,220,0.45); --border: rgba(212,168,67,0.15);
+  --cardBg: rgba(255,255,255,0.04); --red: #e05a5a;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body { background: var(--ink); color: var(--cream); font-family: 'DM Sans', sans-serif; min-height: 100vh; overflow-x: hidden; }
+
+/* ── HEADER ── */
+.hdr { background: linear-gradient(135deg,#161925,#0e1018); border-bottom: 1px solid var(--border); padding: 0 32px; display: flex; align-items: center; gap: 16px; height: 62px; position: sticky; top: 0; z-index: 100; }
+.hdr-icon { width: 38px; height: 38px; border-radius: 8px; background: linear-gradient(135deg,var(--gold),var(--gold2)); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+.hdr-title { font-size: 17px; font-weight: 700; color: var(--gold); font-family: 'Playfair Display', serif; white-space: nowrap; }
+
+/* App nav (shown when logged in) */
+.hdr-nav { display: flex; gap: 4px; margin-left: 28px; }
+.hdr-nav-btn { padding: 7px 18px; border-radius: 7px; font-size: 13px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-family: 'DM Sans', sans-serif; transition: all 0.18s; display: flex; align-items: center; gap: 7px; }
+.hdr-nav-btn:hover { color: var(--cream); background: rgba(255,255,255,0.05); }
+.hdr-nav-btn.active { border-color: rgba(212,168,67,0.35); background: var(--goldlt); color: var(--gold); }
+.hdr-badge { background: var(--gold2); color: #0e1018; font-size: 10px; font-weight: 700; border-radius: 100px; padding: 1px 7px; min-width: 20px; text-align: center; }
+
+/* User info */
+.hdr-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.hdr-email { font-size: 12px; color: var(--muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn-logout { background: rgba(224,90,90,0.12); border: 1px solid rgba(224,90,90,0.25); color: #e05a5a; font-size: 12px; border-radius: 6px; padding: 6px 12px; cursor: pointer; font-family: 'DM Sans', sans-serif; transition: background 0.18s; }
+.btn-logout:hover { background: rgba(224,90,90,0.22); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #4caf8a; box-shadow: 0 0 7px rgba(76,175,138,0.6); flex-shrink: 0; }
+.status-dot.offline { background: var(--red); box-shadow: 0 0 7px rgba(224,90,90,0.6); }
+
+/* ── MAIN ── */
+.main { max-width: 900px; margin: 0 auto; padding: 36px 20px 100px; }
+
+/* ── CARD ── */
+.card { background: var(--cardBg); border: 1px solid var(--border); border-radius: 12px; padding: 28px; margin-bottom: 20px; }
+.card-title { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--gold); margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+
+/* ── FORM ── */
+label { font-size: 13px; color: var(--muted); margin-bottom: 8px; display: block; }
+input[type=text], input[type=email], input[type=password], select, textarea {
+  width: 100%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px; padding: 12px 16px; color: var(--cream); font-size: 14px;
+  font-family: 'DM Sans', sans-serif; outline: none; transition: border-color 0.2s;
+}
+input:focus, select:focus, textarea:focus { border-color: rgba(212,168,67,0.4); }
+select { background: #181c2a; cursor: pointer; }
+select option { background: #181c2a; }
+textarea { resize: vertical; min-height: 90px; }
+.g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.g3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+.g4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .g3 { grid-template-columns: 1fr 1fr; } .g4 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 600px) { .g2 { grid-template-columns: 1fr; } .g3 { grid-template-columns: 1fr; } .hdr-nav { display: none; } }
+
+/* ── HEADER PREVIEW ── */
+.hdr-preview { background: #fff; border-radius: 8px; padding: 14px 18px; margin-top: 20px; font-family: Arial, sans-serif; font-size: 11px; color: #222; border: 2px dashed rgba(212,168,67,0.35); }
+.hdr-preview-title { font-size: 9px; letter-spacing: 0.15em; color: var(--gold); text-transform: uppercase; margin-bottom: 8px; font-family: 'DM Sans',sans-serif; }
+.hdr-preview table { width: 100%; border-collapse: collapse; }
+.hdr-preview td { padding: 4px 8px; vertical-align: middle; }
+.hdr-preview .hdr-border { border: 1px solid #1F3864; }
+.hdr-preview .hdr-center { text-align: center; }
+.hdr-preview .hdr-bold { font-weight: 700; }
+.hdr-preview .hdr-blue { background: #EBF0F8; text-align: center; font-weight: 700; color: #1F3864; font-size: 12px; }
+.hdr-preview .hdr-sm { font-size: 10px; color: #555; }
+
+/* ── CHIPS ── */
+.chips { display: flex; flex-wrap: wrap; gap: 10px; }
+.chip { padding: 9px 18px; border-radius: 100px; font-size: 13px; cursor: pointer; border: 1.5px solid rgba(255,255,255,0.1); color: var(--muted); transition: all 0.18s; user-select: none; }
+.chip.active { border-color: var(--gold); background: var(--goldlt); color: var(--gold); }
+.chip[data-color="green"].active  { border-color: #4caf8a; background: rgba(76,175,138,0.12); color: #4caf8a; }
+.chip[data-color="orange"].active { border-color: #e8a94a; background: rgba(232,169,74,0.12); color: #e8a94a; }
+.chip[data-color="red"].active    { border-color: #e05a5a; background: rgba(224,90,90,0.12); color: #e05a5a; }
+.chip[data-color="purple"].active { border-color: #7b8cde; background: rgba(123,140,222,0.12); color: #7b8cde; }
+
+/* ── NUMBER SPINNER ── */
+.num-row { display: flex; align-items: center; gap: 14px; margin-top: 4px; }
+.num-btn { width: 36px; height: 36px; border-radius: 8px; background: var(--goldlt); border: 1px solid rgba(212,168,67,0.25); color: var(--gold); font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.18s; }
+.num-btn:hover { background: rgba(212,168,67,0.22); }
+.num-val { font-family: 'Playfair Display', serif; font-size: 34px; font-weight: 900; color: var(--gold); min-width: 44px; text-align: center; }
+
+/* ── BUTTONS ── */
+.btn-gold { background: linear-gradient(135deg,var(--gold),var(--gold2)); border: none; color: #0e1018; font-weight: 700; font-size: 15px; border-radius: 8px; padding: 14px 28px; cursor: pointer; font-family: 'DM Sans', sans-serif; letter-spacing: 0.04em; transition: all 0.2s; }
+.btn-gold:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(212,168,67,0.25); }
+.btn-gold:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+.btn-sec { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12); color: var(--cream); font-size: 13px; border-radius: 8px; padding: 11px 20px; cursor: pointer; font-family: 'DM Sans', sans-serif; transition: background 0.18s; }
+.btn-sec:hover { background: rgba(255,255,255,0.11); }
+.btn-sage { background: var(--sagelt); border: 1px solid rgba(45,106,94,0.4); color: #7ecfbd; font-size: 13px; border-radius: 8px; padding: 11px 20px; cursor: pointer; font-family: 'DM Sans', sans-serif; transition: background 0.18s; }
+.btn-sage:hover { background: rgba(45,106,94,0.25); }
+.btn-red { background: rgba(224,90,90,0.1); border: 1px solid rgba(224,90,90,0.25); color: #e05a5a; font-size: 13px; border-radius: 8px; padding: 9px 16px; cursor: pointer; font-family: 'DM Sans', sans-serif; transition: background 0.18s; }
+.btn-red:hover { background: rgba(224,90,90,0.2); }
+
+/* ── TABS ── */
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.tab { padding: 10px 22px; border-radius: 8px; font-size: 13px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.04); color: var(--muted); cursor: pointer; font-family: 'DM Sans', sans-serif; transition: all 0.18s; }
+.tab.active { border-color: rgba(212,168,67,0.4); background: var(--goldlt); color: var(--gold); }
+
+/* ── LOGO DROP ── */
+.logo-drop { width: 110px; height: 76px; border-radius: 8px; border: 1.5px dashed rgba(212,168,67,0.3); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; overflow: hidden; background: rgba(255,255,255,0.03); flex-shrink: 0; transition: border-color 0.2s; }
+.logo-drop:hover { border-color: rgba(212,168,67,0.55); }
+.logo-drop img { width: 100%; height: 100%; object-fit: contain; }
+
+/* ── CAB MODE TOGGLE ── */
+.cab-mode-toggle { display: flex; gap: 0; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); margin-bottom: 22px; }
+.cab-mode-btn { flex: 1; padding: 10px 12px; font-size: 13px; font-family: 'DM Sans',sans-serif; background: rgba(255,255,255,0.02); border: none; color: var(--muted); cursor: pointer; transition: all 0.18s; text-align: center; }
+.cab-mode-btn.active { background: var(--goldlt); color: var(--gold); border-bottom: 2px solid var(--gold); }
+.cab-mode-btn:hover:not(.active) { background: rgba(255,255,255,0.05); color: var(--cream); }
+
+/* ── HEADER FILE DROP ZONE ── */
+.hdr-drop-zone { border: 2px dashed rgba(212,168,67,0.3); border-radius: 12px; background: rgba(255,255,255,0.02); transition: all 0.2s; cursor: pointer; position: relative; overflow: hidden; }
+.hdr-drop-zone:hover, .hdr-drop-zone.drag-over { border-color: var(--gold); background: var(--goldlt); }
+.hdr-drop-empty { padding: 40px 20px; text-align: center; pointer-events: none; }
+.hdr-drop-empty .drop-icon { font-size: 44px; margin-bottom: 12px; }
+.hdr-drop-empty .drop-title { font-size: 16px; font-weight: 600; color: var(--cream); margin-bottom: 6px; }
+.hdr-drop-empty .drop-sub { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+.hdr-drop-empty .drop-formats { display: inline-flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.fmt-badge { font-size: 11px; padding: 3px 10px; border-radius: 100px; border: 1px solid rgba(212,168,67,0.3); color: rgba(212,168,67,0.7); background: rgba(212,168,67,0.06); }
+.hdr-drop-preview { position: relative; }
+.hdr-drop-preview img { width: 100%; max-height: 200px; object-fit: contain; display: block; background: white; }
+.hdr-drop-preview-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: rgba(255,255,255,0.04); border-top: 1px solid rgba(255,255,255,0.07); }
+.hdr-drop-preview-name { font-size: 13px; color: var(--cream); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hdr-drop-preview-size { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+
+/* ── EXAM-SPECIFIC FIELDS (shown in both modes) ── */
+.exam-fields-sep { height: 1px; background: rgba(255,255,255,0.06); margin: 18px 0; }
+.exam-fields-label { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(212,168,67,0.6); margin-bottom: 14px; }
+
+/* ── QUESTION IMAGES ── */
+.qimg-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.qimg-slot { text-align: center; position: relative; }
+.qimg-slot img { width: 72px; height: 54px; object-fit: cover; border-radius: 6px; border: 1px solid rgba(212,168,67,0.3); display: block; }
+.qimg-slot .q-label { font-size: 10px; color: var(--gold); margin-top: 4px; }
+.qimg-add { width: 54px; height: 54px; border-radius: 6px; border: 1.5px dashed rgba(212,168,67,0.2); background: rgba(255,255,255,0.02); color: var(--muted); cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 13px; transition: border-color 0.18s; }
+.qimg-add:hover { border-color: rgba(212,168,67,0.4); }
+.qimg-remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; background: #e05a5a; border: none; color: white; font-size: 9px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+
+/* ── LOADING / STREAMING ── */
+.loading-wrap { text-align: center; padding: 56px 24px 28px; }
+.spinner { width: 52px; height: 52px; border-radius: 50%; border: 3px solid rgba(212,168,67,0.15); border-top: 3px solid var(--gold); animation: spin 0.85s linear infinite; margin: 0 auto 26px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeUp { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
+.anim { animation: fadeUp 0.45s ease; }
+
+.stream-preview { margin: 18px auto 0; max-width: 680px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; padding: 18px 22px; font-size: 13px; line-height: 1.85; color: #bbb6ad; font-family: 'DM Sans', sans-serif; max-height: 300px; overflow-y: auto; text-align: left; white-space: pre-wrap; }
+.stream-cursor { display: inline-block; width: 2px; height: 13px; background: var(--gold); animation: blink 0.9s step-end infinite; vertical-align: middle; margin-left: 2px; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.token-bar { display: flex; gap: 24px; justify-content: center; margin-top: 16px; flex-wrap: wrap; }
+.token-stat .token-val { font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700; color: var(--gold); }
+.token-stat .token-label { font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: 0.1em; }
+
+/* ── RESULT AREAS ── */
+.prova-area { width: 100%; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; padding: 26px; font-size: 14px; line-height: 1.9; color: #ddd8cc; font-family: 'DM Sans', sans-serif; min-height: 480px; resize: vertical; outline: none; }
+.gab-area { width: 100%; background: rgba(45,106,94,0.05); border: 1px solid rgba(45,106,94,0.15); border-radius: 10px; padding: 26px; font-size: 14px; line-height: 1.9; color: #c8f0e0; font-family: 'DM Sans', sans-serif; min-height: 380px; resize: vertical; outline: none; }
+.top-bar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; align-items: center; justify-content: space-between; }
+.top-bar-right { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+/* ── SAVED BADGE ── */
+.badge-saved { display: inline-flex; align-items: center; gap: 5px; background: var(--sagelt); border: 1px solid rgba(45,106,94,0.4); color: #7ecfbd; font-size: 12px; border-radius: 6px; padding: 6px 12px; }
+
+/* ── AUTH SCREEN ── */
+.auth-wrap { min-height: calc(100vh - 62px); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.auth-card { background: rgba(255,255,255,0.04); border: 1px solid var(--border); border-radius: 16px; padding: 40px 36px; width: 100%; max-width: 420px; }
+.auth-logo { text-align: center; margin-bottom: 28px; }
+.auth-logo .icon { width: 52px; height: 52px; border-radius: 12px; background: linear-gradient(135deg,var(--gold),var(--gold2)); display: flex; align-items: center; justify-content: center; font-size: 26px; margin: 0 auto 12px; }
+.auth-logo .title { font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700; color: var(--gold); }
+.auth-logo .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.auth-tabs { display: flex; gap: 0; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); margin-bottom: 24px; }
+.auth-tab { flex: 1; padding: 10px; text-align: center; font-size: 13px; cursor: pointer; color: var(--muted); background: rgba(255,255,255,0.02); transition: all 0.18s; font-family: 'DM Sans', sans-serif; border: none; }
+.auth-tab.active { background: var(--goldlt); color: var(--gold); }
+.auth-field { margin-bottom: 16px; }
+.auth-submit { width: 100%; margin-top: 8px; padding: 14px; font-size: 15px; }
+.auth-error { background: rgba(224,90,90,0.1); border: 1px solid rgba(224,90,90,0.3); color: #e05a5a; font-size: 13px; border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; display: none; }
+.auth-info { background: var(--sagelt); border: 1px solid rgba(45,106,94,0.3); color: #7ecfbd; font-size: 13px; border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; display: none; }
+
+/* ── HISTORY ── */
+.history-search { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+.history-search input { flex: 1; min-width: 180px; }
+.history-empty { text-align: center; padding: 64px 24px; }
+.history-empty .icon { font-size: 48px; margin-bottom: 16px; }
+.history-empty .title { font-family: 'Playfair Display', serif; font-size: 20px; color: var(--gold); margin-bottom: 8px; }
+.history-empty .sub { font-size: 14px; color: var(--muted); }
+.prova-cards { display: flex; flex-direction: column; gap: 12px; }
+.prova-card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 18px 20px; display: flex; align-items: flex-start; gap: 16px; transition: border-color 0.18s; }
+.prova-card:hover { border-color: rgba(212,168,67,0.25); }
+.prova-card-body { flex: 1; min-width: 0; }
+.prova-card-disc { font-weight: 600; font-size: 15px; color: var(--cream); }
+.prova-card-meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.prova-card-snippet { font-size: 12px; color: rgba(232,228,220,0.35); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 500px; }
+.prova-card-actions { display: flex; gap: 8px; flex-shrink: 0; align-items: center; }
+.disc-pill { display: inline-block; font-size: 11px; padding: 3px 10px; border-radius: 100px; font-weight: 600; margin-right: 8px; }
+
+/* ── TOAST ── */
+.toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%); padding: 12px 22px; border-radius: 10px; font-size: 13px; z-index: 9999; display: none; max-width: 90vw; text-align: center; transition: opacity 0.3s; }
+.toast.error { background: #2a1010; border: 1px solid #e05a5a; color: #e05a5a; }
+.toast.ok { background: rgba(45,106,94,0.3); border: 1px solid rgba(45,106,94,0.5); color: #7ecfbd; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { background: rgba(212,168,67,0.3); border-radius: 3px; }
+
+/* ── SAFE AREA (notch/Dynamic Island) ── */
+.hdr { padding-left: max(32px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+body { padding-bottom: env(safe-area-inset-bottom); }
+
+/* ── INSTALL BANNER ── */
+.install-banner {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+  background: linear-gradient(135deg, #161925, #0e1018);
+  border-top: 1px solid var(--border);
+  padding: 14px max(20px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  display: none; align-items: center; gap: 14px;
+  animation: slideUp 0.3s ease;
+}
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.install-banner-icon { width: 44px; height: 44px; border-radius: 10px; background: linear-gradient(135deg,var(--gold),var(--gold2)); display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; }
+.install-banner-text { flex: 1; }
+.install-banner-text strong { font-size: 14px; color: var(--cream); display: block; }
+.install-banner-text span { font-size: 12px; color: var(--muted); }
+.install-banner-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.btn-install { background: linear-gradient(135deg,var(--gold),var(--gold2)); border: none; color: #0e1018; font-weight: 700; font-size: 13px; border-radius: 7px; padding: 10px 18px; cursor: pointer; font-family: 'DM Sans', sans-serif; white-space: nowrap; }
+.btn-dismiss { background: transparent; border: 1px solid rgba(255,255,255,0.12); color: var(--muted); font-size: 12px; border-radius: 7px; padding: 10px 14px; cursor: pointer; font-family: 'DM Sans', sans-serif; }
+
+/* ── MOBILE TWEAKS ── */
+@media (max-width: 480px) {
+  .main { padding: 20px 14px 80px; }
+  .card { padding: 18px; }
+  .hdr-title { font-size: 15px; }
+  .top-bar { flex-direction: column; align-items: stretch; }
+  .top-bar-right { justify-content: flex-start; }
+  .btn-gold, .btn-sec, .btn-sage { font-size: 13px; padding: 10px 14px; }
+  .num-val { font-size: 28px; }
+  .auth-card { padding: 28px 20px; }
+  .prova-card-actions { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+
+<!-- ══ HEADER ══════════════════════════════════════════════ -->
+<div class="hdr">
+  <div class="hdr-icon">📝</div>
+  <div class="hdr-title">Gerador de Provas</div>
+
+  <!-- Nav (only when logged in) -->
+  <nav class="hdr-nav" id="hdr-nav" style="display:none">
+    <button class="hdr-nav-btn active" id="nav-btn-form" onclick="goTo('form')">✦ Nova Prova</button>
+    <button class="hdr-nav-btn" id="nav-btn-history" onclick="goTo('history')">
+      📁 Minhas Provas <span class="hdr-badge" id="history-badge" style="display:none">0</span>
+    </button>
+  </nav>
+
+  <div class="hdr-right">
+    <div class="status-dot offline" id="status-dot" title="Status do servidor"></div>
+    <span class="hdr-email" id="hdr-email" style="display:none"></span>
+    <button class="btn-logout" id="btn-logout" style="display:none" onclick="logout()">Sair</button>
+  </div>
+</div>
+
+<!-- ══ MAIN ══════════════════════════════════════════════ -->
+<div class="main" id="app">
+
+  <!-- ── AUTH ──────────────────────────────────────────── -->
+  <div id="view-auth" class="auth-wrap" style="display:none">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <div class="icon">📝</div>
+        <div class="title">Gerador de Provas com IA</div>
+        <div class="sub">Faça login para criar e salvar suas provas</div>
+      </div>
+
+      <div class="auth-tabs">
+        <button class="auth-tab active" id="auth-tab-login" onclick="switchAuthTab('login')">Entrar</button>
+        <button class="auth-tab" id="auth-tab-register" onclick="switchAuthTab('register')">Criar conta</button>
+      </div>
+
+      <div id="auth-error" class="auth-error"></div>
+      <div id="auth-info" class="auth-info"></div>
+
+      <div class="auth-field"><label>E-mail</label><input type="email" id="auth-email" placeholder="seu@email.com" onkeydown="if(event.key==='Enter')submitAuth()"></div>
+      <div class="auth-field"><label>Senha</label><input type="password" id="auth-pass" placeholder="••••••••" onkeydown="if(event.key==='Enter')submitAuth()"></div>
+      <div class="auth-field" id="auth-field-name" style="display:none"><label>Nome do(a) Professor(a) (opcional)</label><input type="text" id="auth-name" placeholder="Prof. Ana Silva..."></div>
+
+      <button class="btn-gold auth-submit" id="auth-submit" onclick="submitAuth()">Entrar</button>
+    </div>
+  </div>
+
+  <!-- ── FORM ──────────────────────────────────────────── -->
+  <div id="view-form" style="display:none" class="anim">
+
+    <div class="card">
+      <div class="card-title">🏫 Cabeçalho da Escola <span style="color:var(--muted);font-size:10px;font-weight:400;letter-spacing:0;text-transform:none">— aparece no topo de todo Word e PDF</span></div>
+
+      <!-- ── Alternância de modo ── -->
+      <div class="cab-mode-toggle">
+        <button class="cab-mode-btn active" id="mode-btn-manual" onclick="setCabMode('manual')">✍ Preencher manualmente</button>
+        <button class="cab-mode-btn" id="mode-btn-arquivo" onclick="setCabMode('arquivo')">📎 Usar arquivo da escola</button>
+      </div>
+
+      <!-- ══ MODO MANUAL ══════════════════════════════════════ -->
+      <div id="cab-manual">
+
+        <!-- Linha 1: Logo + Secretaria + Ano -->
+        <div style="display:flex;gap:18px;align-items:flex-start;margin-bottom:16px">
+          <div style="flex-shrink:0;text-align:center">
+            <label style="margin-bottom:6px">Brasão / Logo</label>
+            <div class="logo-drop" onclick="document.getElementById('logo-input').click()">
+              <img id="logo-preview" src="" alt="" style="display:none">
+              <div id="logo-placeholder" style="text-align:center">
+                <div style="font-size:20px">🖼</div>
+                <div style="font-size:9px;color:rgba(232,228,220,0.35);margin-top:3px">Brasão / Logo</div>
+              </div>
+            </div>
+            <input type="file" id="logo-input" accept="image/*" style="display:none" onchange="handleLogo(this)">
+            <button id="logo-remove" onclick="removeLogo()" style="display:none;margin-top:5px;width:110px;font-size:10px;background:rgba(224,90,90,0.15);border:1px solid rgba(224,90,90,0.3);color:#e05a5a;border-radius:4px;padding:3px 0;cursor:pointer;">Remover</button>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:12px">
+            <div>
+              <label>Secretaria / Órgão Responsável</label>
+              <input type="text" id="f-secretaria" placeholder="Secretaria Municipal de Educação de..." oninput="saveCabecalhoLocal()" onchange="updateHdrPreview()">
+            </div>
+            <div class="g2">
+              <div>
+                <label>Nome da Escola *</label>
+                <input type="text" id="f-escola" placeholder="Escola Estadual Prof. João Silva..." oninput="saveCabecalhoLocal()" onchange="updateHdrPreview()">
+              </div>
+              <div>
+                <label>Ano Letivo</label>
+                <input type="text" id="f-ano" placeholder="2026" oninput="saveCabecalhoLocal()" onchange="updateHdrPreview()">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Linha 2: Endereço / Contato -->
+        <div class="g2" style="margin-bottom:14px">
+          <div>
+            <label>Endereço</label>
+            <input type="text" id="f-endereco" placeholder="Rua das Flores, 123 – Centro – Cidade/UF" oninput="saveCabecalhoLocal()">
+          </div>
+          <div class="g2" style="gap:10px">
+            <div><label>Telefone</label><input type="text" id="f-tel" placeholder="(11) 1234-5678" oninput="saveCabecalhoLocal()"></div>
+            <div><label>E-mail da Escola</label><input type="text" id="f-email-escola" placeholder="escola@edu.gov.br" oninput="saveCabecalhoLocal()"></div>
+          </div>
+        </div>
+
+        <!-- Preview manual -->
+        <div class="hdr-preview" id="hdr-preview">
+          <div class="hdr-preview-title">🔍 Prévia do cabeçalho no documento</div>
+          <table>
+            <tr>
+              <td class="hdr-border hdr-center" style="width:15%;padding:6px" id="prev-logo-cell">📋</td>
+              <td class="hdr-border hdr-center" style="width:85%">
+                <div class="hdr-sm" id="prev-secretaria">Secretaria de Educação</div>
+                <div class="hdr-bold" id="prev-escola">Nome da Escola</div>
+                <div class="hdr-sm" id="prev-contato"></div>
+              </td>
+            </tr>
+            <tr><td colspan="2" class="hdr-border hdr-blue" id="prev-title">AVALIAÇÃO DE DISCIPLINA — 1º BIMESTRE / 2026</td></tr>
+            <tr><td colspan="2" class="hdr-border" style="font-size:10px;padding:4px 8px" id="prev-prof-row">Prof(a): _______________  |  Série/Turma: ___  |  Turno: ___  |  Valor: ___</td></tr>
+            <tr>
+              <td colspan="2" class="hdr-border" style="font-size:10px;padding:4px 8px">
+                <div>Nome do(a) Aluno(a): ___________________________________________  Nº: _____</div>
+                <div>Data: ___/___/______  &nbsp;&nbsp; Nota: _________________________  Visto: _________</div>
+              </td>
+            </tr>
+          </table>
+        </div>
+
+      </div><!-- /cab-manual -->
+
+      <!-- ══ MODO ARQUIVO ════════════════════════════════════ -->
+      <div id="cab-arquivo" style="display:none">
+
+        <!-- Drop zone -->
+        <div class="hdr-drop-zone" id="hdr-drop-zone"
+             onclick="document.getElementById('hdr-file-input').click()"
+             ondragover="event.preventDefault();this.classList.add('drag-over')"
+             ondragleave="this.classList.remove('drag-over')"
+             ondrop="handleHeaderDrop(event)">
+
+          <input type="file" id="hdr-file-input"
+            accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
+            style="display:none" onchange="handleHeaderFile(this)">
+
+          <!-- Estado vazio -->
+          <div class="hdr-drop-empty" id="hdr-drop-empty">
+            <div class="drop-icon">📋</div>
+            <div class="drop-title">Arraste o arquivo da escola aqui</div>
+            <div class="drop-sub">ou clique para selecionar</div>
+            <div class="drop-formats">
+              <span class="fmt-badge">📝 Word (.docx)</span>
+              <span class="fmt-badge">📄 PDF (.pdf)</span>
+            </div>
+            <div style="margin-top:14px;font-size:12px;color:rgba(212,168,67,0.5);max-width:340px;margin-left:auto;margin-right:auto;line-height:1.7">
+              O sistema preenche automaticamente os campos em branco do cabeçalho (professor, disciplina, série, etc.) e insere as questões geradas pela IA no corpo do documento
+            </div>
+          </div>
+
+          <!-- Preview do arquivo carregado -->
+          <div id="hdr-drop-preview" style="display:none" onclick="event.stopPropagation()">
+            <img id="hdr-img-preview" src="" alt="Cabeçalho da escola" style="width:100%;max-height:220px;object-fit:contain;background:#fff;display:block;">
+            <div class="hdr-drop-preview-bar">
+              <span style="font-size:16px">✅</span>
+              <span class="hdr-drop-preview-name" id="hdr-file-name">cabeçalho.png</span>
+              <span class="hdr-drop-preview-size" id="hdr-file-size"></span>
+              <button class="btn-red" style="padding:6px 12px;font-size:12px" onclick="removeHeaderFile()">Remover</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Instruções -->
+        <div style="margin-top:14px;background:rgba(45,106,94,0.08);border:1px solid rgba(45,106,94,0.25);border-radius:8px;padding:14px 16px;">
+          <div style="font-size:12px;color:#7ecfbd;font-weight:600;margin-bottom:10px">⚙️ Como funciona</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.9">
+            <strong style="color:var(--cream)">Word (.docx):</strong> O sistema identifica os campos em branco (Professor: ___, Disciplina: ___, etc.) e os preenche automaticamente. As questões geradas pela IA são inseridas no corpo do documento.<br><br>
+            <strong style="color:var(--cream)">PDF (.pdf):</strong> O cabeçalho da escola é preservado intacto. As questões geradas são adicionadas nas páginas seguintes do mesmo arquivo PDF.<br><br>
+            <span style="color:rgba(212,168,67,0.7)">💡 O arquivo original da escola não é alterado — um novo documento é gerado.</span>
+          </div>
+        </div>
+
+      </div><!-- /cab-arquivo -->
+
+      <!-- ══ CAMPOS DA AVALIAÇÃO (comuns aos dois modos) ════ -->
+      <div class="exam-fields-sep"></div>
+      <div class="exam-fields-label">📝 Dados da avaliação</div>
+
+      <div class="g3" style="margin-bottom:14px">
+        <div>
+          <label>Nome do(a) Professor(a) *</label>
+          <input type="text" id="f-prof" placeholder="Prof. Ana Silva..." oninput="saveCabecalhoLocal()" onchange="updateHdrPreview()">
+        </div>
+        <div>
+          <label>Turno</label>
+          <select id="f-turno" onchange="saveCabecalhoLocal();updateHdrPreview()">
+            <option value="">— Selecione —</option>
+            <option>Matutino</option><option>Vespertino</option>
+            <option>Noturno</option><option>Integral</option>
+          </select>
+        </div>
+        <div>
+          <label>Período / Bimestre</label>
+          <select id="f-bimestre" onchange="saveCabecalhoLocal();updateHdrPreview()">
+            <option value="">— Selecione —</option>
+            <option>1º Bimestre</option><option>2º Bimestre</option>
+            <option>3º Bimestre</option><option>4º Bimestre</option>
+            <option>1º Trimestre</option><option>2º Trimestre</option><option>3º Trimestre</option>
+            <option>1º Semestre</option><option>2º Semestre</option>
+            <option>Anual</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="g2">
+        <div>
+          <label>Tipo de Avaliação</label>
+          <select id="f-tipo-aval" onchange="saveCabecalhoLocal();updateHdrPreview()">
+            <option>Prova</option><option>Avaliação</option><option>Teste</option>
+            <option>Simulado</option><option>Trabalho Avaliativo</option>
+            <option>Prova de Recuperação</option><option>Prova Final</option>
+          </select>
+        </div>
+        <div>
+          <label>Valor da Prova</label>
+          <input type="text" id="f-valor" placeholder="Ex: 10,0 pontos" oninput="saveCabecalhoLocal()">
+        </div>
+      </div>
+
+      <div style="margin-top:12px;font-size:11px;color:rgba(212,168,67,0.5);display:flex;align-items:center;gap:6px">
+        💾 Dados salvos automaticamente para próximas provas
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🎓 Informações da Prova</div>
+      <div class="g2">
+        <div>
+          <label>Disciplina *</label>
+          <select id="f-disc">
+            <option value="">Selecione...</option>
+            <option>Português</option><option>Matemática</option><option>História</option>
+            <option>Geografia</option><option>Ciências</option><option>Biologia</option>
+            <option>Física</option><option>Química</option><option>Inglês</option>
+            <option>Espanhol</option><option>Educação Física</option><option>Artes</option>
+            <option>Filosofia</option><option>Sociologia</option><option>Outros</option>
+          </select>
+        </div>
+        <div>
+          <label>Série / Ano *</label>
+          <select id="f-serie">
+            <option value="">Selecione...</option>
+            <option>1º ano – Fundamental I</option><option>2º ano – Fundamental I</option>
+            <option>3º ano – Fundamental I</option><option>4º ano – Fundamental I</option>
+            <option>5º ano – Fundamental I</option><option>6º ano – Fundamental II</option>
+            <option>7º ano – Fundamental II</option><option>8º ano – Fundamental II</option>
+            <option>9º ano – Fundamental II</option><option>1º ano – Ensino Médio</option>
+            <option>2º ano – Ensino Médio</option><option>3º ano – Ensino Médio</option>
+            <option>EJA</option><option>Ensino Superior</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <label>Conteúdo / Tópicos abordados *</label>
+        <textarea id="f-conteudo" rows="3" placeholder="Ex: Revolução Francesa — causas, fases, consequências e impactos na Europa moderna..."></textarea>
+      </div>
+      <div style="margin-top:16px">
+        <label>Instruções especiais (opcional)</label>
+        <textarea id="f-instrucoes" rows="2" placeholder="Ex: inclua pelo menos 2 questões com interpretação de texto, use linguagem acessível..."></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="g2">
+        <div>
+          <div class="card-title">Tipo de Questões</div>
+          <div class="chips" id="chips-tipo">
+            <div class="chip active" data-val="mista" onclick="pickChip('tipo',this)">⊞ Mista</div>
+            <div class="chip" data-val="multipla" onclick="pickChip('tipo',this)">◉ Múltipla Escolha</div>
+            <div class="chip" data-val="vf" onclick="pickChip('tipo',this)">◈ Verdadeiro/Falso</div>
+            <div class="chip" data-val="discursiva" onclick="pickChip('tipo',this)">✍ Discursiva</div>
+          </div>
+        </div>
+        <div>
+          <div class="card-title">Dificuldade</div>
+          <div class="chips" id="chips-dif">
+            <div class="chip" data-val="facil" data-color="green" onclick="pickChip('dif',this)">Fácil</div>
+            <div class="chip active" data-val="medio" data-color="orange" onclick="pickChip('dif',this)">Médio</div>
+            <div class="chip" data-val="dificil" data-color="red" onclick="pickChip('dif',this)">Difícil</div>
+            <div class="chip" data-val="mista" data-color="purple" onclick="pickChip('dif',this)">Variada</div>
+          </div>
+          <div style="margin-top:24px">
+            <div class="card-title" style="margin-bottom:12px">Nº de Questões</div>
+            <div class="num-row">
+              <button class="num-btn" onclick="changeNum(-1)">−</button>
+              <span class="num-val" id="num-display">10</span>
+              <button class="num-btn" onclick="changeNum(1)">+</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn-gold" style="width:100%;padding:18px;font-size:16px" onclick="gerarProva()">
+      ✦ Gerar Prova com IA
+    </button>
+    <div id="form-error" style="text-align:center;color:#e05a5a;font-size:13px;margin-top:10px;display:none">
+      Preencha os campos obrigatórios: disciplina, série e conteúdo.
+    </div>
+  </div>
+
+  <!-- ── LOADING ────────────────────────────────────────── -->
+  <div id="view-loading" style="display:none">
+    <div class="loading-wrap">
+      <div class="spinner"></div>
+      <div style="font-family:'Playfair Display',serif;font-size:24px;font-weight:700;color:var(--gold);margin-bottom:12px">Elaborando sua prova...</div>
+      <div style="font-size:14px;color:var(--muted);line-height:1.75" id="loading-desc"></div>
+      <div class="token-bar">
+        <div class="token-stat"><div class="token-val" id="tk-chars">0</div><div class="token-label">CARACTERES</div></div>
+        <div class="token-stat"><div class="token-val" id="tk-words">0</div><div class="token-label">PALAVRAS</div></div>
+        <div class="token-stat"><div class="token-val" id="tk-q">0</div><div class="token-label">QUESTÕES</div></div>
+      </div>
+      <div class="stream-preview" id="stream-preview"></div>
+    </div>
+  </div>
+
+  <!-- ── RESULT ─────────────────────────────────────────── -->
+  <div id="view-result" style="display:none" class="anim">
+    <div class="top-bar">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div style="font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:var(--gold)">✦ Prova gerada</div>
+        <span class="badge-saved" id="badge-saved" style="display:none">✅ Salva no histórico</span>
+      </div>
+      <div class="top-bar-right">
+        <button class="btn-sec" onclick="goTo('form')">← Nova prova</button>
+        <button class="btn-sec" onclick="goTo('history')">📁 Histórico</button>
+        <button class="btn-sec" onclick="copiarTexto()">📋 Copiar</button>
+        <button class="btn-gold" onclick="exportarDocx()">📄 Word</button>
+        <button class="btn-sage" onclick="exportarPdf()">🖨 PDF</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">🖼 Imagens nas Questões (opcional)</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:14px">
+        Clique em <strong style="color:var(--gold)">+Qn</strong> para adicionar imagem à questão. Aparece no Word e no PDF.
+      </div>
+      <div class="qimg-grid" id="qimg-grid"></div>
+      <input type="file" id="qimg-input" accept="image/*" style="display:none" onchange="handleQImage(this)">
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" id="tab-prova" onclick="switchTab('prova')">📄 Prova</div>
+      <div class="tab" id="tab-gab" onclick="switchTab('gabarito')">✅ Gabarito (professor)</div>
+    </div>
+
+    <textarea id="prova-text" class="prova-area" oninput="syncContent()" style="display:block"></textarea>
+    <textarea id="gab-text" class="gab-area" style="display:none"></textarea>
+
+    <div style="margin-top:10px;font-size:12px;color:rgba(232,228,220,0.3)">
+      💡 Edite o texto diretamente antes de baixar. O gabarito é separado — só o professor vê.
+    </div>
+  </div>
+
+  <!-- ── HISTORY ────────────────────────────────────────── -->
+  <div id="view-history" style="display:none" class="anim">
+    <div style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:var(--gold);margin-bottom:20px">
+      📁 Minhas Provas
+    </div>
+
+    <div class="history-search">
+      <input type="text" id="history-search" placeholder="🔍  Buscar por disciplina ou conteúdo..." oninput="filterHistory()">
+      <button class="btn-sec" onclick="loadHistory()">↻ Atualizar</button>
+      <button class="btn-gold" onclick="goTo('form')">+ Nova Prova</button>
+    </div>
+
+    <div id="history-list">
+      <div class="history-empty">
+        <div class="icon">📂</div>
+        <div style="font-size:14px;color:var(--muted)">Carregando...</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- INSTALL BANNER -->
+<div class="install-banner" id="install-banner">
+  <div class="install-banner-icon">📝</div>
+  <div class="install-banner-text">
+    <strong>Instalar ProvasIA</strong>
+    <span>Adicione à tela inicial para acesso rápido</span>
+  </div>
+  <div class="install-banner-actions">
+    <button class="btn-dismiss" onclick="dismissInstall()">Agora não</button>
+    <button class="btn-install" onclick="triggerInstall()">Instalar</button>
+  </div>
+</div>
+
+<!-- ══ SCRIPTS ══════════════════════════════════════════════ -->
+<script>
+// ── CONFIG & STATE ─────────────────────────────────────────
+let supabaseClient = null;
+let currentSession = null;
+
+const state = {
+  tipo: 'mista', dif: 'medio', numQ: 10,
+  logoDataUrl: null,
+  headerImageDataUrl: null,
+  templateFile: null,       // File object do Word/PDF da escola
+  templateFileName: null,
+  templateKind: null,       // 'docx' | 'pdf'
+  cabMode: 'manual',
+  questionImages: {},
+  addingImgTo: null,
+  provaText: '', gabText: '',
+  historyData: [],
+  currentView: 'auth',
+};
+
+// ── INIT ───────────────────────────────────────────────────
+async function init() {
+  checkServerStatus();
+
+  // Load Supabase config from server
+  let cfg;
+  try {
+    cfg = await fetch('/api/config').then(r => r.json());
+  } catch {
+    showToast('Servidor offline. Inicie com: npm run dev', 'error', 8000);
+    showView('auth');
+    return;
+  }
+
+  const { createClient: makeClient } = window.supabase;
+  supabaseClient = makeClient(cfg.supabaseUrl, cfg.supabaseKey);
+
+  // Listen for auth state changes
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    currentSession = session;
+    if (session) {
+      onLoggedIn(session);
+    } else {
+      onLoggedOut();
+    }
+  });
+
+  // Check existing session
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  if (session) {
+    currentSession = session;
+    onLoggedIn(session);
+  } else {
+    onLoggedOut();
+  }
+}
+
+function onLoggedIn(session) {
+  document.getElementById('hdr-nav').style.display = 'flex';
+  document.getElementById('hdr-email').style.display = 'block';
+  document.getElementById('hdr-email').textContent = session.user.email;
+  document.getElementById('btn-logout').style.display = 'block';
+  if (state.currentView === 'auth') {
+    goTo('form');
+    // Small delay so DOM is visible before loading values
+    setTimeout(() => { loadCabecalhoLocal(); updateHdrPreview(); }, 50);
+  }
+}
+
+function onLoggedOut() {
+  document.getElementById('hdr-nav').style.display = 'none';
+  document.getElementById('hdr-email').style.display = 'none';
+  document.getElementById('btn-logout').style.display = 'none';
+  showView('auth');
+}
+
+async function logout() {
+  await supabaseClient.auth.signOut();
+}
+
+async function checkServerStatus() {
+  const dot = document.getElementById('status-dot');
+  try {
+    const r = await fetch('/api/status');
+    dot.classList.toggle('offline', !r.ok);
+  } catch {
+    dot.classList.add('offline');
+  }
+}
+
+// ── AUTH ───────────────────────────────────────────────────
+let authMode = 'login';
+
+function switchAuthTab(mode) {
+  authMode = mode;
+  document.getElementById('auth-tab-login').classList.toggle('active', mode === 'login');
+  document.getElementById('auth-tab-register').classList.toggle('active', mode === 'register');
+  document.getElementById('auth-field-name').style.display = mode === 'register' ? 'block' : 'none';
+  document.getElementById('auth-submit').textContent = mode === 'login' ? 'Entrar' : 'Criar conta';
+  document.getElementById('auth-error').style.display = 'none';
+  document.getElementById('auth-info').style.display = 'none';
+}
+
+async function submitAuth() {
+  const email = document.getElementById('auth-email').value.trim();
+  const pass  = document.getElementById('auth-pass').value;
+  const errEl = document.getElementById('auth-error');
+  const infoEl = document.getElementById('auth-info');
+  const btn   = document.getElementById('auth-submit');
+
+  errEl.style.display = 'none';
+  infoEl.style.display = 'none';
+
+  if (!email || !pass) {
+    errEl.textContent = 'Preencha e-mail e senha.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (pass.length < 6) {
+    errEl.textContent = 'A senha precisa ter pelo menos 6 caracteres.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Aguarde...';
+
+  try {
+    if (authMode === 'login') {
+      const { error } = await supabaseClient.auth.signInWithPassword({ email, password: pass });
+      if (error) throw error;
+    } else {
+      const { error } = await supabaseClient.auth.signUp({ email, password: pass });
+      if (error) throw error;
+      infoEl.textContent = '✅ Conta criada! Verifique seu e-mail para confirmar (se necessário).';
+      infoEl.style.display = 'block';
+    }
+  } catch (err) {
+    errEl.textContent = translateAuthError(err.message);
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = authMode === 'login' ? 'Entrar' : 'Criar conta';
+  }
+}
+
+function translateAuthError(msg) {
+  if (msg.includes('Invalid login credentials')) return 'E-mail ou senha incorretos.';
+  if (msg.includes('Email not confirmed'))        return 'Confirme seu e-mail antes de entrar.';
+  if (msg.includes('User already registered'))    return 'Este e-mail já está cadastrado. Tente entrar.';
+  if (msg.includes('Password should be'))         return 'A senha precisa ter pelo menos 6 caracteres.';
+  return msg;
+}
+
+// ── NAVIGATION ─────────────────────────────────────────────
+function goTo(view) {
+  if (!currentSession && view !== 'auth') { showView('auth'); return; }
+  if (view === 'history') loadHistory();
+  showView(view);
+  document.getElementById('nav-btn-form').classList.toggle('active', view === 'form');
+  document.getElementById('nav-btn-history').classList.toggle('active', view === 'history');
+}
+
+function showView(name) {
+  ['auth','form','loading','result','history'].forEach(v => {
+    const el = document.getElementById('view-' + v);
+    if (el) el.style.display = v === name ? '' : 'none';
+  });
+  state.currentView = name;
+}
+
+// ── TOKEN HELPER ────────────────────────────────────────────
+async function getToken() {
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  return session?.access_token;
+}
+
+// ── CHIPS ──────────────────────────────────────────────────
+function pickChip(group, el) {
+  document.getElementById('chips-' + group).querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  state[group] = el.dataset.val;
+}
+
+// ── NUMBER ─────────────────────────────────────────────────
+function changeNum(delta) {
+  state.numQ = Math.min(30, Math.max(3, state.numQ + delta));
+  document.getElementById('num-display').textContent = state.numQ;
+}
+
+// ── CABEÇALHO: localStorage ────────────────────────────────
+const CAB_KEY = 'provasIA-cabecalho-v1';
+
+// ── MODO DE CABEÇALHO ──────────────────────────────────────
+function setCabMode(mode) {
+  state.cabMode = mode;
+  document.getElementById('mode-btn-manual').classList.toggle('active', mode === 'manual');
+  document.getElementById('mode-btn-arquivo').classList.toggle('active', mode === 'arquivo');
+  document.getElementById('cab-manual').style.display  = mode === 'manual'  ? '' : 'none';
+  document.getElementById('cab-arquivo').style.display = mode === 'arquivo' ? '' : 'none';
+  saveCabecalhoLocal();
+}
+
+// ── HEADER FILE UPLOAD ─────────────────────────────────────
+function handleHeaderDrop(event) {
+  event.preventDefault();
+  document.getElementById('hdr-drop-zone').classList.remove('drag-over');
+  const file = event.dataTransfer.files[0];
+  if (file) loadHeaderFile(file);
+}
+function handleHeaderFile(input) {
+  const file = input.files[0];
+  if (file) loadHeaderFile(file);
+  input.value = '';
+}
+
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const PDF_MIME  = 'application/pdf';
+
+function getFileKind(file) {
+  if (file.name.endsWith('.docx') || file.type === DOCX_MIME) return 'docx';
+  if (file.name.endsWith('.pdf')  || file.type === PDF_MIME)  return 'pdf';
+  return null;
+}
+
+function loadHeaderFile(file) {
+  const kind = getFileKind(file);
+  if (!kind) {
+    showToast('Envie apenas arquivos Word (.docx) ou PDF (.pdf).', 'error');
+    return;
+  }
+
+  state.templateFile     = file;
+  state.templateFileName = file.name;
+  state.templateKind     = kind;
+
+  const icon = kind === 'docx' ? '📝' : '📄';
+  const label = kind === 'docx' ? 'Word (.docx)' : 'PDF (.pdf)';
+
+  document.getElementById('hdr-img-preview').style.display    = 'none';
+  document.getElementById('hdr-drop-preview').style.display   = '';
+  document.getElementById('hdr-drop-preview').querySelector('img').style.display = 'none';
+  document.getElementById('hdr-file-name').innerHTML =
+    `${icon} <strong style="color:var(--cream)">${file.name}</strong> <span style="color:var(--gold);font-size:11px">${label}</span>`;
+  document.getElementById('hdr-file-size').textContent = formatBytes(file.size);
+  document.getElementById('hdr-drop-empty').style.display     = 'none';
+  document.getElementById('hdr-drop-zone').style.cursor       = 'default';
+  saveCabecalhoLocal();
+  showToast(`Arquivo ${label} carregado. Gere a prova e baixe o documento.`, 'ok', 4000);
+}
+
+function removeHeaderFile() {
+  state.templateFile     = null;
+  state.templateFileName = null;
+  state.templateKind     = null;
+  state.headerImageDataUrl = null;
+  document.getElementById('hdr-img-preview').src           = '';
+  document.getElementById('hdr-img-preview').style.display = 'none';
+  document.getElementById('hdr-drop-empty').style.display  = '';
+  document.getElementById('hdr-drop-preview').style.display= 'none';
+  document.getElementById('hdr-drop-zone').style.cursor    = 'pointer';
+  localStorage.removeItem('provasIA-headerImg');
+  saveCabecalhoLocal();
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/1048576).toFixed(1) + ' MB';
+}
+
+function saveHeaderImageLocal(dataUrl) {
+  localStorage.setItem('provasIA-headerImg', dataUrl);
+}
+
+function loadHeaderImageLocal() {
+  const saved = localStorage.getItem('provasIA-headerImg');
+  if (!saved) return;
+  state.headerImageDataUrl = saved;
+  document.getElementById('hdr-img-preview').src           = saved;
+  document.getElementById('hdr-file-name').textContent     = 'cabeçalho salvo';
+  document.getElementById('hdr-file-size').textContent     = formatBytes(saved.length * 0.75);
+  document.getElementById('hdr-drop-empty').style.display  = 'none';
+  document.getElementById('hdr-drop-preview').style.display= '';
+  document.getElementById('hdr-drop-zone').style.cursor    = 'default';
+}
+
+// ── HELPER: get image natural dimensions ───────────────────
+function imgDims(dataUrl) {
+  return new Promise(resolve => {
+    const i = new Image();
+    i.onload = () => resolve({ w: i.naturalWidth, h: i.naturalHeight });
+    i.onerror = () => resolve({ w: 800, h: 200 });
+    i.src = dataUrl;
+  });
+}
+
+function saveCabecalhoLocal() {
+  const data = {
+    modo:        state.cabMode || 'manual',
+    secretaria:  document.getElementById('f-secretaria')?.value  || '',
+    escola:      document.getElementById('f-escola')?.value      || '',
+    ano:         document.getElementById('f-ano')?.value         || '',
+    endereco:    document.getElementById('f-endereco')?.value    || '',
+    tel:         document.getElementById('f-tel')?.value         || '',
+    emailEscola: document.getElementById('f-email-escola')?.value|| '',
+    prof:        document.getElementById('f-prof')?.value        || '',
+    turno:       document.getElementById('f-turno')?.value       || '',
+    bimestre:    document.getElementById('f-bimestre')?.value    || '',
+    tipoAval:    document.getElementById('f-tipo-aval')?.value   || 'Prova',
+    valor:       document.getElementById('f-valor')?.value       || '',
+  };
+  localStorage.setItem(CAB_KEY, JSON.stringify(data));
+}
+
+function loadCabecalhoLocal() {
+  try {
+    const raw = localStorage.getItem(CAB_KEY);
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    const set = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+    set('f-secretaria', d.secretaria); set('f-escola', d.escola);
+    set('f-ano',        d.ano);        set('f-endereco', d.endereco);
+    set('f-tel',        d.tel);        set('f-email-escola', d.emailEscola);
+    set('f-prof',       d.prof);       set('f-turno', d.turno);
+    set('f-bimestre',   d.bimestre);   set('f-tipo-aval', d.tipoAval);
+    set('f-valor',      d.valor);
+    // Restore mode
+    if (d.modo) setCabMode(d.modo);
+    // Restore header image if in arquivo mode
+    if (d.modo === 'arquivo') loadHeaderImageLocal();
+    updateHdrPreview();
+  } catch {}
+}
+
+function getCab() {
+  return {
+    modo:           state.cabMode || 'manual',
+    headerImageDataUrl: state.headerImageDataUrl || null,
+    logoDataUrl:    state.logoDataUrl,
+    secretaria:     document.getElementById('f-secretaria')?.value  || '',
+    escola:         document.getElementById('f-escola')?.value      || '',
+    ano:            document.getElementById('f-ano')?.value         || new Date().getFullYear().toString(),
+    endereco:       document.getElementById('f-endereco')?.value    || '',
+    tel:            document.getElementById('f-tel')?.value         || '',
+    emailEscola:    document.getElementById('f-email-escola')?.value|| '',
+    prof:           document.getElementById('f-prof')?.value        || '',
+    turno:          document.getElementById('f-turno')?.value       || '',
+    bimestre:       document.getElementById('f-bimestre')?.value    || '',
+    tipoAval:       document.getElementById('f-tipo-aval')?.value   || 'Prova',
+    valor:          document.getElementById('f-valor')?.value       || '',
+  };
+}
+
+function setCab(cab) {
+  if (!cab) return;
+  const set = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
+  set('f-secretaria', cab.secretaria); set('f-escola', cab.escola);
+  set('f-ano',        cab.ano);        set('f-endereco', cab.endereco);
+  set('f-tel',        cab.tel);        set('f-email-escola', cab.emailEscola);
+  set('f-prof',       cab.prof);       set('f-turno', cab.turno);
+  set('f-bimestre',   cab.bimestre);   set('f-tipo-aval', cab.tipoAval);
+  set('f-valor',      cab.valor);
+  updateHdrPreview();
+}
+
+function updateHdrPreview() {
+  const disc    = document.getElementById('f-disc')?.value     || 'DISCIPLINA';
+  const secretaria = document.getElementById('f-secretaria')?.value || 'Secretaria de Educação';
+  const escola  = document.getElementById('f-escola')?.value   || 'Nome da Escola';
+  const tel     = document.getElementById('f-tel')?.value;
+  const email   = document.getElementById('f-email-escola')?.value;
+  const endereco= document.getElementById('f-endereco')?.value;
+  const prof    = document.getElementById('f-prof')?.value     || '_______________';
+  const serie   = document.getElementById('f-serie')?.value    || '___';
+  const turno   = document.getElementById('f-turno')?.value    || '___';
+  const bimestre= document.getElementById('f-bimestre')?.value || '___';
+  const tipoAval= document.getElementById('f-tipo-aval')?.value|| 'Prova';
+  const valor   = document.getElementById('f-valor')?.value;
+  const ano     = document.getElementById('f-ano')?.value      || new Date().getFullYear();
+
+  const contato = [endereco, tel ? `Tel: ${tel}` : '', email].filter(Boolean).join(' | ');
+  const titleParts = [tipoAval.toUpperCase(), 'DE', disc.toUpperCase(), '—', bimestre || '—', '/', ano];
+
+  const el = id => document.getElementById(id);
+  if (el('prev-secretaria')) el('prev-secretaria').textContent = secretaria;
+  if (el('prev-escola'))     el('prev-escola').textContent     = escola;
+  if (el('prev-contato'))    el('prev-contato').textContent    = contato;
+  if (el('prev-title'))      el('prev-title').textContent      = titleParts.join(' ');
+  if (el('prev-prof-row'))   el('prev-prof-row').textContent   =
+    `Prof(a): ${prof}  |  Série/Turma: ${serie}  |  Turno: ${turno}` + (valor ? `  |  Valor: ${valor}` : '');
+}
+
+// ── LOGO ───────────────────────────────────────────────────
+function handleLogo(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    state.logoDataUrl = e.target.result;
+    document.getElementById('logo-preview').src = e.target.result;
+    document.getElementById('logo-preview').style.display = 'block';
+    document.getElementById('logo-placeholder').style.display = 'none';
+    document.getElementById('logo-remove').style.display = 'block';
+    document.getElementById('prev-logo-cell').innerHTML = `<img src="${e.target.result}" style="max-width:60px;max-height:40px;object-fit:contain">`;
+  };
+  reader.readAsDataURL(file);
+}
+function removeLogo() {
+  state.logoDataUrl = null;
+  document.getElementById('logo-preview').style.display = 'none';
+  document.getElementById('logo-placeholder').style.display = '';
+  document.getElementById('logo-remove').style.display = 'none';
+  document.getElementById('logo-input').value = '';
+  document.getElementById('prev-logo-cell').innerHTML = '📋';
+}
+
+// ── QUESTION IMAGES ────────────────────────────────────────
+function renderQImgGrid() {
+  const grid = document.getElementById('qimg-grid');
+  grid.innerHTML = '';
+  for (let n = 1; n <= state.numQ; n++) {
+    const slot = document.createElement('div');
+    slot.className = 'qimg-slot';
+    if (state.questionImages[n]) {
+      slot.innerHTML = `<img src="${state.questionImages[n].dataUrl}" alt="Q${n}">
+        <button class="qimg-remove" onclick="removeQImg(${n})">✕</button>
+        <div class="q-label">Q${n}</div>`;
+    } else {
+      slot.innerHTML = `<button class="qimg-add" onclick="pickQImg(${n})">
+        <span style="font-size:15px">+</span><span style="font-size:9px">Q${n}</span></button>`;
+    }
+    grid.appendChild(slot);
+  }
+}
+function pickQImg(n) { state.addingImgTo = n; document.getElementById('qimg-input').click(); }
+function handleQImage(input) {
+  const file = input.files[0];
+  if (!file || !state.addingImgTo) return;
+  const n = state.addingImgTo;
+  const reader = new FileReader();
+  reader.onload = (e) => { state.questionImages[n] = { dataUrl: e.target.result }; renderQImgGrid(); };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+function removeQImg(n) { delete state.questionImages[n]; renderQImgGrid(); }
+
+// ── TABS ───────────────────────────────────────────────────
+function switchTab(tab) {
+  document.getElementById('tab-prova').classList.toggle('active', tab === 'prova');
+  document.getElementById('tab-gab').classList.toggle('active', tab === 'gabarito');
+  document.getElementById('prova-text').style.display = tab === 'prova' ? 'block' : 'none';
+  document.getElementById('gab-text').style.display = tab === 'gabarito' ? 'block' : 'none';
+}
+function syncContent() { state.provaText = document.getElementById('prova-text').value; }
+
+// ── BUILD PROMPT ───────────────────────────────────────────
+function buildPrompt() {
+  const disc = document.getElementById('f-disc').value;
+  const serie = document.getElementById('f-serie').value;
+  const cont = document.getElementById('f-conteudo').value;
+  const inst = document.getElementById('f-instrucoes').value;
+  const tipoLabel = {
+    mista: 'Mista (combine múltipla escolha, V/F e discursivas)',
+    multipla: 'Apenas múltipla escolha com 5 alternativas (A a E)',
+    vf: 'Apenas Verdadeiro ou Falso',
+    discursiva: 'Apenas questões discursivas/abertas',
+  }[state.tipo];
+  const difLabel = { facil:'Fácil', medio:'Médio', dificil:'Difícil', mista:'Variada (misture níveis)' }[state.dif];
+  return `Você é um professor especialista em ${disc}. Crie uma prova escolar completa e bem elaborada.
+
+ESPECIFICAÇÕES:
+- Disciplina: ${disc}
+- Série/Ano: ${serie}
+- Conteúdo: ${cont}
+- Tipo de questões: ${tipoLabel}
+- Dificuldade: ${difLabel}
+- Número de questões: ${state.numQ}
+${inst ? `- Instruções especiais: ${inst}` : ''}
+
+FORMATO OBRIGATÓRIO DA SAÍDA:
+1. Liste as questões numeradas: "1. enunciado da questão"
+2. Para múltipla escolha, alternativas em linhas separadas: "A)", "B)", "C)", "D)", "E)"
+3. Para V/F: "( ) Verdadeiro  ( ) Falso" após o enunciado
+4. Para discursivas: "Resposta: ___"
+5. NÃO inclua cabeçalho
+6. Após todas as questões, escreva exatamente: ---GABARITO---
+7. Depois liste o gabarito comentado de cada questão
+
+Use contextos do cotidiano, seja criativo, avalie diferentes níveis cognitivos.`;
+}
+
+// ── STREAMING STATS ────────────────────────────────────────
+function updateStats(text) {
+  document.getElementById('tk-chars').textContent = text.length.toLocaleString('pt-BR');
+  document.getElementById('tk-words').textContent = (text.match(/\S+/g)||[]).length.toLocaleString('pt-BR');
+  const qm = text.match(/^\d+[\.\)]/gm);
+  document.getElementById('tk-q').textContent = qm ? qm.length : 0;
+}
+
+// ── GENERATE ───────────────────────────────────────────────
+async function gerarProva() {
+  const disc = document.getElementById('f-disc').value;
+  const serie = document.getElementById('f-serie').value;
+  const cont = document.getElementById('f-conteudo').value;
+
+  if (!disc || !serie || !cont.trim()) {
+    document.getElementById('form-error').style.display = 'block';
+    return;
+  }
+  document.getElementById('form-error').style.display = 'none';
+
+  document.getElementById('loading-desc').innerHTML =
+    `Criando <strong style="color:var(--gold)">${state.numQ} questões</strong> de ${disc} para ${serie}.`;
+
+  const preview = document.getElementById('stream-preview');
+  preview.innerHTML = '<span class="stream-cursor"></span>';
+  ['tk-chars','tk-words','tk-q'].forEach(id => document.getElementById(id).textContent = '0');
+
+  showView('loading');
+  document.getElementById('badge-saved').style.display = 'none';
+
+  const token = await getToken();
+  if (!token) { showView('auth'); return; }
+
+  let accumulated = '';
+
+  try {
+    const res = await fetch('/api/gerar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ prompt: buildPrompt() }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let   buffer  = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        if (raw === '[DONE]') break;
+        let parsed; try { parsed = JSON.parse(raw); } catch { continue; }
+        if (parsed.error) throw new Error(parsed.error);
+        if (parsed.text) {
+          accumulated += parsed.text;
+          updateStats(accumulated);
+          const tail = accumulated.slice(-900);
+          preview.innerHTML = tail.replace(/</g,'&lt;') + '<span class="stream-cursor"></span>';
+          preview.scrollTop = preview.scrollHeight;
+        }
+      }
+    }
+
+    const parts = accumulated.split('---GABARITO---');
+    state.provaText = parts[0]?.trim() || accumulated;
+    state.gabText   = parts[1]?.trim() || '';
+
+    document.getElementById('prova-text').value = state.provaText;
+    document.getElementById('gab-text').value   = state.gabText;
+
+    state.questionImages = {};
+    renderQImgGrid();
+    switchTab('prova');
+    showView('result');
+
+    // Auto-save
+    saveProva(disc, serie, cont);
+
+  } catch (e) {
+    showView('form');
+    showToast('Erro ao gerar prova: ' + e.message, 'error');
+  }
+}
+
+// ── SAVE PROVA ─────────────────────────────────────────────
+async function saveProva(disc, serie, cont) {
+  const token = await getToken();
+  if (!token) return;
+  const cab = getCab();
+
+  try {
+    const r = await fetch('/api/provas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        disciplina:   disc || document.getElementById('f-disc').value,
+        serie:        serie || document.getElementById('f-serie').value,
+        conteudo:     cont || document.getElementById('f-conteudo').value,
+        tipo:         state.tipo,
+        dificuldade:  state.dif,
+        num_questoes: state.numQ,
+        prova_text:   state.provaText,
+        gabarito_text: state.gabText,
+        escola:       cab.escola,
+        professor:    cab.prof,
+        cabecalho:    cab,
+      }),
+    });
+    if (r.ok) {
+      document.getElementById('badge-saved').style.display = 'inline-flex';
+      updateHistoryBadge();
+    }
+  } catch { /* save failure is non-critical */ }
+}
+
+// ── HISTORY ────────────────────────────────────────────────
+async function loadHistory() {
+  const token = await getToken();
+  if (!token) return;
+
+  document.getElementById('history-list').innerHTML =
+    `<div class="history-empty"><div class="icon">⏳</div><div style="font-size:14px;color:var(--muted)">Carregando...</div></div>`;
+
+  try {
+    const r = await fetch('/api/provas', { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) throw new Error();
+    state.historyData = await r.json();
+    updateHistoryBadge();
+    renderHistory(state.historyData);
+  } catch {
+    document.getElementById('history-list').innerHTML =
+      `<div class="history-empty"><div class="icon">⚠️</div><div style="font-size:14px;color:var(--muted)">Erro ao carregar. Tente novamente.</div></div>`;
+  }
+}
+
+function updateHistoryBadge() {
+  const badge = document.getElementById('history-badge');
+  const count = state.historyData.length;
+  badge.textContent = count;
+  badge.style.display = count > 0 ? 'inline-block' : 'none';
+}
+
+function filterHistory() {
+  const q = document.getElementById('history-search').value.toLowerCase();
+  const filtered = q
+    ? state.historyData.filter(p =>
+        p.disciplina.toLowerCase().includes(q) ||
+        p.serie.toLowerCase().includes(q) ||
+        (p.conteudo||'').toLowerCase().includes(q) ||
+        (p.escola||'').toLowerCase().includes(q))
+    : state.historyData;
+  renderHistory(filtered);
+}
+
+const DISC_COLORS = {
+  'Português': '#7b8cde', 'Matemática': '#e8a94a', 'História': '#d4a843',
+  'Geografia': '#4caf8a', 'Ciências': '#54c0eb', 'Biologia': '#4caf8a',
+  'Física': '#54c0eb', 'Química': '#e05a5a', 'Inglês': '#7b8cde',
+  'Espanhol': '#e8a94a', 'Filosofia': '#7b8cde', 'Sociologia': '#7b8cde',
+};
+function discColor(disc) { return DISC_COLORS[disc] || '#d4a843'; }
+
+function renderHistory(data) {
+  const list = document.getElementById('history-list');
+  if (!data.length) {
+    list.innerHTML = `<div class="history-empty">
+      <div class="icon">📂</div>
+      <div class="title">Nenhuma prova ainda</div>
+      <div class="sub">Clique em "+ Nova Prova" para começar.</div>
+    </div>`;
+    return;
+  }
+
+  const html = data.map(p => {
+    const date = new Date(p.created_at).toLocaleDateString('pt-BR', { day:'2-digit', month:'short', year:'numeric' });
+    const color = discColor(p.disciplina);
+    const escola = p.escola ? `· ${p.escola}` : '';
+    const snippet = (p.conteudo||'').slice(0, 90) + (p.conteudo?.length > 90 ? '…' : '');
+    return `<div class="prova-card">
+      <div class="prova-card-body">
+        <div class="prova-card-disc">
+          <span class="disc-pill" style="background:${color}22;color:${color};border:1px solid ${color}44">${p.disciplina}</span>
+          ${p.serie}
+        </div>
+        <div class="prova-card-meta">${date} · ${p.num_questoes} questões · ${p.dificuldade} ${escola}</div>
+        <div class="prova-card-snippet">${snippet}</div>
+      </div>
+      <div class="prova-card-actions">
+        <button class="btn-sec" onclick="openProva('${p.id}')">Abrir</button>
+        <button class="btn-red" onclick="deleteProva('${p.id}', this)">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  list.innerHTML = `<div class="prova-cards">${html}</div>`;
+}
+
+async function openProva(id) {
+  const token = await getToken();
+  if (!token) return;
+  try {
+    const r = await fetch(`/api/provas/${id}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) throw new Error();
+    const p = await r.json();
+
+    state.provaText = p.prova_text || '';
+    state.gabText   = p.gabarito_text || '';
+    state.numQ      = p.num_questoes || 10;
+    state.questionImages = {};
+
+    document.getElementById('prova-text').value = state.provaText;
+    document.getElementById('gab-text').value   = state.gabText;
+    document.getElementById('f-disc').value     = p.disciplina || '';
+    document.getElementById('f-serie').value    = p.serie || '';
+    document.getElementById('f-conteudo').value = p.conteudo || '';
+    // Restore full cabecalho if saved, fallback to flat fields
+    if (p.cabecalho) {
+      setCab(p.cabecalho);
+      if (p.cabecalho.logoDataUrl) {
+        state.logoDataUrl = p.cabecalho.logoDataUrl;
+        document.getElementById('logo-preview').src = p.cabecalho.logoDataUrl;
+        document.getElementById('logo-preview').style.display = 'block';
+        document.getElementById('logo-placeholder').style.display = 'none';
+        document.getElementById('logo-remove').style.display = 'block';
+      }
+    } else {
+      document.getElementById('f-escola').value = p.escola || '';
+      document.getElementById('f-prof').value   = p.professor || '';
+    }
+
+    renderQImgGrid();
+    switchTab('prova');
+    document.getElementById('badge-saved').style.display = 'inline-flex';
+    showView('result');
+    document.getElementById('nav-btn-history').classList.remove('active');
+    document.getElementById('nav-btn-form').classList.remove('active');
+  } catch {
+    showToast('Erro ao abrir a prova.', 'error');
+  }
+}
+
+async function deleteProva(id, btn) {
+  if (!confirm('Excluir esta prova permanentemente?')) return;
+  const token = await getToken();
+  if (!token) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/provas/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) throw new Error();
+    state.historyData = state.historyData.filter(p => p.id !== id);
+    updateHistoryBadge();
+    filterHistory();
+    showToast('Prova excluída.', 'ok');
+  } catch {
+    btn.disabled = false;
+    showToast('Erro ao excluir.', 'error');
+  }
+}
+
+// ── COPY ───────────────────────────────────────────────────
+function copiarTexto() {
+  const txt = document.getElementById('prova-text').value +
+    (state.gabText ? '\n\nGABARITO:\n' + state.gabText : '');
+  navigator.clipboard.writeText(txt).then(() => showToast('Texto copiado!', 'ok', 2000));
+}
+
+// ── TOAST ───────────────────────────────────────────────────
+function showToast(msg, type = 'error', duration = 4000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type}`;
+  t.style.display = 'block';
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => { t.style.display = 'none'; }, duration);
+}
+
+// ══════════════════════════════════════════════════════════════
+// PROCESSAMENTO DE TEMPLATE DA ESCOLA
+// ══════════════════════════════════════════════════════════════
+
+function escXml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Gera um parágrafo Word XML puro (injetado no XML existente)
+function makeWPara(text, opts = {}) {
+  const { bold = false, fontSize = 24, indentLeft = 0,
+          spaceBefore = 0, spaceAfter = 100, color = '' } = opts;
+  const colorXml = color ? `<w:color w:val="${color}"/>` : '';
+  return `<w:p>
+    <w:pPr>
+      <w:spacing w:before="${spaceBefore}" w:after="${spaceAfter}"/>
+      ${indentLeft ? `<w:ind w:left="${indentLeft}"/>` : ''}
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        ${bold ? '<w:b/><w:bCs/>' : ''}
+        <w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/>
+        ${colorXml}
+      </w:rPr>
+      <w:t xml:space="preserve">${escXml(text)}</w:t>
+    </w:r>
+  </w:p>`;
+}
+
+// Gera o XML das questões para injeção no Word template
+function generateQuestionsWordXml(provaText) {
+  const lines = provaText.split('\n');
+  let xml = makeWPara('', { spaceBefore: 300, spaceAfter: 0 }); // espaçador
+  let qNum = 0;
+
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) { xml += makeWPara('', { spaceAfter: 80 }); continue; }
+
+    const isQ   = /^\d+[\.\)]/.test(t);
+    const isAlt = /^[a-eA-E][\.\)]\s/.test(t);
+
+    if (isQ) {
+      qNum++;
+      xml += makeWPara(t, { bold: true, fontSize: 24, spaceBefore: 240, spaceAfter: 80 });
+    } else if (isAlt) {
+      xml += makeWPara(t, { fontSize: 22, indentLeft: 560, spaceAfter: 60 });
+    } else {
+      xml += makeWPara(t, { fontSize: 22, spaceAfter: 80 });
+    }
+  }
+  return xml;
+}
+
+// Gera o XML do gabarito (nova página)
+function generateGabWordXml(gabText) {
+  if (!gabText.trim()) return '';
+  let xml = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  xml += makeWPara('GABARITO — USO EXCLUSIVO DO PROFESSOR',
+    { bold: true, fontSize: 26, spaceBefore: 0, spaceAfter: 200, color: '2E4F7F' });
+  for (const line of gabText.split('\n')) {
+    const t = line.trim();
+    if (!t) { xml += makeWPara('', { spaceAfter: 80 }); continue; }
+    xml += makeWPara(t, { fontSize: 22, spaceAfter: 80 });
+  }
+  return xml;
+}
+
+// Identifica e preenche campos em branco no XML do Word da escola
+function fillWordTemplateFields(xmlStr, cab, disc, serie) {
+  // Mapeamento: padrão de label → valor a inserir
+  const fieldDefs = [
+    { pats: ['professor(a)', 'professora', 'professor', 'prof(a):', 'prof.:'],   val: cab.prof },
+    { pats: ['disciplina:', 'componente curricular', 'matéria:'],                val: disc },
+    { pats: ['série/turma', 'série e turma', 'série:', 'turma:', 'ano/turma'],   val: serie },
+    { pats: ['turno:'],                                                           val: cab.turno },
+    { pats: ['bimestre:', 'trimestre:', 'semestre:', 'período:'],                 val: cab.bimestre },
+    { pats: ['valor da prova', 'valor:', 'pontuação:'],                           val: cab.valor },
+    { pats: ['ano letivo:', 'ano:'],                                              val: cab.ano },
+    { pats: ['data:'],   val: new Date().toLocaleDateString('pt-BR') },
+    { pats: ['tipo de avaliação', 'avaliação:', 'tipo:'],                         val: cab.tipoAval },
+  ];
+
+  // Processa parágrafo por parágrafo via regex
+  return xmlStr.replace(/<w:p[ >][\s\S]*?<\/w:p>/g, paraXml => {
+    // Concatena o texto visível do parágrafo
+    const paraText = (paraXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || [])
+      .map(m => m.replace(/<[^>]+>/g, ''))
+      .join('')
+      .toLowerCase();
+
+    // Só tenta se houver underscores (campos em branco)
+    if (!/_{2,}/.test(paraXml)) return paraXml;
+
+    for (const { pats, val } of fieldDefs) {
+      if (!val) continue;
+      const matched = pats.some(p => paraText.includes(p.toLowerCase()));
+      if (!matched) continue;
+
+      // Substitui o primeiro bloco de underscores dentro de um <w:t>
+      let done = false;
+      const modified = paraXml.replace(
+        /<w:t([^>]*)>([^<]*_{2,}[^<]*)<\/w:t>/g,
+        (m, attrs, text) => {
+          if (done) return m;
+          done = true;
+          return `<w:t${attrs}>${text.replace(/_{2,}/, escXml(val))}</w:t>`;
+        }
+      );
+      if (done) return modified;
+    }
+    return paraXml;
+  });
+}
+
+// Exportação Word a partir do template .docx da escola
+async function exportarDocxFromTemplate() {
+  const disc  = document.getElementById('f-disc').value;
+  const serie = document.getElementById('f-serie').value;
+  const cab   = getCab();
+
+  if (!state.templateFile) {
+    showToast('Nenhum arquivo de modelo carregado.', 'error');
+    return;
+  }
+  if (state.templateKind !== 'docx') {
+    showToast('Para exportar Word com modelo PDF, baixe pela opção "Baixar PDF".', 'error', 5000);
+    return;
+  }
+  if (!window.JSZip) {
+    showToast('JSZip não carregado. Recarregue a página.', 'error');
+    return;
+  }
+
+  try {
+    const ab  = await state.templateFile.arrayBuffer();
+    const zip = await JSZip.loadAsync(ab);
+
+    let xmlStr = await zip.file('word/document.xml').async('string');
+
+    // 1. Preenche os campos em branco do cabeçalho
+    xmlStr = fillWordTemplateFields(xmlStr, cab, disc, serie);
+
+    // 2. Gera XML das questões e do gabarito
+    const provaXml = generateQuestionsWordXml(
+      document.getElementById('prova-text').value
+    );
+    const gabXml = generateGabWordXml(
+      document.getElementById('gab-text').value
+    );
+
+    // 3. Injeta antes do último <w:sectPr> (propriedades de seção, sempre o último elemento do body)
+    const sectIdx = xmlStr.lastIndexOf('<w:sectPr');
+    if (sectIdx !== -1) {
+      xmlStr = xmlStr.slice(0, sectIdx) + provaXml + gabXml + xmlStr.slice(sectIdx);
+    } else {
+      xmlStr = xmlStr.replace('</w:body>', provaXml + gabXml + '</w:body>');
+    }
+
+    zip.file('word/document.xml', xmlStr);
+
+    const blob = await zip.generateAsync({
+      type: 'blob',
+      mimeType: DOCX_MIME,
+    });
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `prova_${disc.replace(/\s/g, '_')}_${new Date().toISOString().slice(0, 10)}.docx`;
+    a.click();
+
+  } catch (e) {
+    console.error(e);
+    showToast('Erro ao processar o modelo Word: ' + e.message, 'error', 6000);
+  }
+}
+
+// Exportação PDF a partir do template .pdf da escola (via pdf-lib)
+async function exportarPdfFromTemplate() {
+  const disc  = document.getElementById('f-disc').value;
+  const provaText = document.getElementById('prova-text').value;
+  const gabText   = document.getElementById('gab-text').value;
+
+  if (!state.templateFile || state.templateKind !== 'pdf') {
+    showToast('Nenhum arquivo PDF de modelo carregado.', 'error');
+    return;
+  }
+  if (!window.PDFLib) {
+    showToast('pdf-lib não carregado. Recarregue a página.', 'error');
+    return;
+  }
+
+  try {
+    const { PDFDocument, StandardFonts, rgb } = PDFLib;
+
+    // Carrega o PDF da escola
+    const ab = await state.templateFile.arrayBuffer();
+    const templateDoc = await PDFDocument.load(ab);
+
+    // Cria novo PDF
+    const pdfDoc = await PDFDocument.create();
+
+    // Copia todas as páginas do template (cabeçalho oficial)
+    const tplPageCount = templateDoc.getPageCount();
+    const copiedPages  = await pdfDoc.copyPages(templateDoc, [...Array(tplPageCount).keys()]);
+    copiedPages.forEach(p => pdfDoc.addPage(p));
+
+    // Fontes
+    const fontNormal = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontBold   = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+    // Função auxiliar: quebra texto em linhas
+    function wrapLine(text, font, size, maxW) {
+      const words = text.split(' ');
+      const lines = [];
+      let cur = '';
+      for (const w of words) {
+        const test = cur ? cur + ' ' + w : w;
+        if (font.widthOfTextAtSize(test, size) > maxW && cur) {
+          lines.push(cur); cur = w;
+        } else { cur = test; }
+      }
+      if (cur) lines.push(cur);
+      return lines;
+    }
+
+    // Adiciona páginas com as questões
+    const { width, height } = pdfDoc.getPage(0).getSize();
+    const ml = 40, mr = 40, mt = 40, usableW = width - ml - mr;
+
+    let page = pdfDoc.addPage([width, height]);
+    let y    = height - mt;
+
+    const chk = (needed) => {
+      if (y - needed < mt) {
+        page = pdfDoc.addPage([width, height]);
+        y = height - mt;
+      }
+    };
+
+    const drawLine = (text, font, size, x, indent = 0, extraY = 0) => {
+      const lines = wrapLine(text, font, size, usableW - indent);
+      for (const ln of lines) {
+        chk(size + 4);
+        page.drawText(ln, { x: x + indent, y, font, size, color: rgb(0.07, 0.07, 0.1) });
+        y -= size + 4;
+      }
+      y -= extraY;
+    };
+
+    let qNum = 0;
+    for (const raw of provaText.split('\n')) {
+      const t = raw.trim();
+      if (!t) { y -= 8; continue; }
+      chk(20);
+
+      const isQ   = /^\d+[\.\)]/.test(t);
+      const isAlt = /^[a-eA-E][\.\)]\s/.test(t);
+
+      if (isQ) {
+        qNum++;
+        y -= 6; // espaço antes da questão
+        drawLine(t, fontBold, 11, ml, 0, 2);
+      } else if (isAlt) {
+        drawLine(t, fontNormal, 11, ml, 18, 1);
+      } else {
+        drawLine(t, fontNormal, 11, ml, 0, 1);
+      }
+    }
+
+    // Gabarito em nova página
+    if (gabText.trim()) {
+      page = pdfDoc.addPage([width, height]);
+      y    = height - mt;
+      page.drawText('GABARITO — USO EXCLUSIVO DO PROFESSOR', {
+        x: ml, y, font: fontBold, size: 13,
+        color: rgb(0.18, 0.31, 0.5),
+      });
+      y -= 20;
+      page.drawLine({ start:{x:ml,y}, end:{x:width-mr,y}, thickness:0.5, color:rgb(0.18,0.31,0.5) });
+      y -= 14;
+      for (const raw of gabText.split('\n')) {
+        const t = raw.trim();
+        if (!t) { y -= 8; continue; }
+        chk(16);
+        drawLine(t, fontNormal, 11, ml, 0, 1);
+      }
+    }
+
+    const bytes = await pdfDoc.save();
+    const blob  = new Blob([bytes], { type: 'application/pdf' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `prova_${disc.replace(/\s/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
+    a.click();
+
+  } catch (e) {
+    console.error(e);
+    showToast('Erro ao processar o modelo PDF: ' + e.message, 'error', 6000);
+  }
+}
+
+// ── DOCX EXPORT ────────────────────────────────────────────
+function docxImgRun(dataUrl, width, height) {
+  const { ImageRun } = docx;
+  const b64 = dataUrl.split(',')[1];
+  const mm  = dataUrl.match(/data:(image\/\w+);/);
+  const tp  = (mm && (mm[1].includes('jpeg')||mm[1].includes('jpg'))) ? 'jpeg' : 'png';
+  return new ImageRun({ data: Uint8Array.from(atob(b64), c=>c.charCodeAt(0)), transformation:{width,height}, type:tp });
+}
+
+function buildDocxCabecalho(cab, disc, serie) {
+  const {
+    Table, TableRow, TableCell, Paragraph, TextRun, ImageRun,
+    AlignmentType, BorderStyle, WidthType, VerticalAlign, ShadingType
+  } = docx;
+
+  const BLUE  = '1F3864';
+  const LBLUE = 'DEE7F3';
+  const FONT  = 'Arial';
+
+  const bAll = {
+    top:    {style:BorderStyle.SINGLE,size:8,color:BLUE},
+    bottom: {style:BorderStyle.SINGLE,size:8,color:BLUE},
+    left:   {style:BorderStyle.SINGLE,size:8,color:BLUE},
+    right:  {style:BorderStyle.SINGLE,size:8,color:BLUE},
+  };
+  const bNone = {
+    top:{style:BorderStyle.NONE,size:0,color:'FFFFFF'},
+    bottom:{style:BorderStyle.NONE,size:0,color:'FFFFFF'},
+    left:{style:BorderStyle.NONE,size:0,color:'FFFFFF'},
+    right:{style:BorderStyle.NONE,size:0,color:'FFFFFF'},
+  };
+  const bInner = (side) => ({...bNone, [side]:{style:BorderStyle.SINGLE,size:4,color:BLUE}});
+
+  const tr = (row) => new TextRun({...row, font:FONT});
+  const para = (opts, ...runs) => new Paragraph({...opts, children:runs.map(r=>tr(r))});
+  const cell = (opts, ...children) => new TableCell({...opts, children});
+
+  // ─── ROW 1: Logo | School Info ───────────────────────────
+  const logoChildren = [];
+  if (cab.logoDataUrl) {
+    logoChildren.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [docxImgRun(cab.logoDataUrl, 80, 65)],
+      spacing: {before:40,after:40}
+    }));
+  } else {
+    logoChildren.push(new Paragraph({children:[]}));
+  }
+
+  const infoChildren = [];
+  if (cab.secretaria) {
+    infoChildren.push(para({alignment:AlignmentType.CENTER,spacing:{after:30}},
+      {text:cab.secretaria, size:18, color:'444444', italics:true}));
+  }
+  infoChildren.push(para({alignment:AlignmentType.CENTER,spacing:{after:30}},
+    {text:cab.escola||'ESCOLA', bold:true, size:28}));
+  const contato = [cab.endereco, cab.tel?`Tel: ${cab.tel}`:'', cab.emailEscola].filter(Boolean).join('  |  ');
+  if (contato) {
+    infoChildren.push(para({alignment:AlignmentType.CENTER,spacing:{after:20}},
+      {text:contato, size:16, color:'666666'}));
+  }
+
+  const row1 = new TableRow({ children:[
+    cell({
+      width:{size:18,type:WidthType.PERCENTAGE},
+      verticalAlign: VerticalAlign.CENTER,
+      borders:{top:bAll.top,bottom:bAll.bottom,left:bAll.left,right:{style:BorderStyle.NONE,size:0,color:'FFF'}},
+    }, ...logoChildren),
+    cell({
+      width:{size:82,type:WidthType.PERCENTAGE},
+      verticalAlign: VerticalAlign.CENTER,
+      borders:{top:bAll.top,bottom:bAll.bottom,left:{style:BorderStyle.NONE,size:0,color:'FFF'},right:bAll.right},
+    }, ...infoChildren),
+  ]});
+
+  // ─── ROW 2: Title bar ────────────────────────────────────
+  const bimestre = cab.bimestre || '';
+  const anoLetivo= cab.ano || new Date().getFullYear();
+  const titleTxt = [
+    (cab.tipoAval||'PROVA').toUpperCase(), 'DE', disc.toUpperCase(),
+    '—', [bimestre, anoLetivo].filter(Boolean).join(' / ')
+  ].join(' ');
+
+  const row2 = new TableRow({ children:[
+    cell({
+      columnSpan:2,
+      shading:{type:'solid',color:LBLUE},
+      borders:bAll,
+    }, para({alignment:AlignmentType.CENTER,spacing:{before:80,after:80}},
+        {text:titleTxt, bold:true, size:24, color:BLUE})),
+  ]});
+
+  // ─── ROW 3: Prof | Série/Turma | Turno | Valor ───────────
+  const infoTxt = [
+    `Prof(a): ${cab.prof||'_____________________________'}`,
+    `Série/Turma: ${serie||'___________'}`,
+    cab.turno ? `Turno: ${cab.turno}` : '',
+    cab.valor ? `Valor: ${cab.valor}` : '',
+  ].filter(Boolean).join('     ');
+
+  const row3 = new TableRow({ children:[
+    cell({columnSpan:2,borders:bAll},
+      para({spacing:{before:60,after:60}},
+        {text:infoTxt, size:20})),
+  ]});
+
+  // ─── ROW 4: Student fields ───────────────────────────────
+  const row4 = new TableRow({ children:[
+    cell({columnSpan:2,borders:bAll},
+      new Paragraph({spacing:{before:60,after:30}, children:[
+        tr({text:'Nome do(a) Aluno(a): ',bold:true,size:22}),
+        tr({text:'___________________________________________',size:22}),
+        tr({text:'   Nº: ',bold:true,size:22}),
+        tr({text:'________',size:22}),
+      ]}),
+      new Paragraph({spacing:{before:20,after:60}, children:[
+        tr({text:'Data: ',bold:true,size:22}),
+        tr({text:'___/___/______',size:22}),
+        tr({text:'   Nota: ',bold:true,size:22}),
+        tr({text:'_______________________________',size:22}),
+        tr({text:'   Visto: ',bold:true,size:22}),
+        tr({text:'___________',size:22}),
+      ]}),
+    ),
+  ]});
+
+  return new Table({
+    width:{size:100,type:WidthType.PERCENTAGE},
+    rows:[row1,row2,row3,row4],
+  });
+}
+
+// Apenas as linhas de título + prof + aluno (sem a parte da escola)
+// — usado quando a escola forneceu a imagem do cabeçalho
+function buildDocxCabecalhoComplementar(cab, disc, serie) {
+  const {
+    Table, TableRow, TableCell, Paragraph, TextRun,
+    AlignmentType, BorderStyle, WidthType, ShadingType
+  } = docx;
+
+  const BLUE  = '1F3864';
+  const LBLUE = 'DEE7F3';
+  const FONT  = 'Arial';
+  const bAll  = {
+    top:{style:BorderStyle.SINGLE,size:8,color:BLUE},
+    bottom:{style:BorderStyle.SINGLE,size:8,color:BLUE},
+    left:{style:BorderStyle.SINGLE,size:8,color:BLUE},
+    right:{style:BorderStyle.SINGLE,size:8,color:BLUE},
+  };
+  const tr = (row) => new TextRun({...row, font:FONT});
+  const para = (opts, ...runs) => new Paragraph({...opts, children:runs.map(r=>tr(r))});
+  const cell = (opts, ...children) => new TableCell({...opts, children});
+
+  const bimestre = cab.bimestre || '';
+  const anoLetivo= cab.ano || new Date().getFullYear();
+  const titleTxt = [
+    (cab.tipoAval||'PROVA').toUpperCase(), 'DE', disc.toUpperCase(),
+    '—', [bimestre, anoLetivo].filter(Boolean).join(' / ')
+  ].join(' ');
+
+  const infoTxt = [
+    `Prof(a): ${cab.prof||'_____________________________'}`,
+    `Série/Turma: ${serie||'___________'}`,
+    cab.turno ? `Turno: ${cab.turno}` : '',
+    cab.valor ? `Valor: ${cab.valor}` : '',
+  ].filter(Boolean).join('     ');
+
+  return new Table({
+    width: { size:100, type:WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({ children:[
+        cell({ columnSpan:2, shading:{type:'solid',color:LBLUE}, borders:bAll },
+          para({alignment:AlignmentType.CENTER,spacing:{before:80,after:80}},
+            {text:titleTxt, bold:true, size:24, color:BLUE}))
+      ]}),
+      new TableRow({ children:[
+        cell({ columnSpan:2, borders:bAll },
+          para({spacing:{before:60,after:60}}, {text:infoTxt, size:20}))
+      ]}),
+      new TableRow({ children:[
+        cell({ columnSpan:2, borders:bAll },
+          new Paragraph({spacing:{before:60,after:30}, children:[
+            tr({text:'Nome do(a) Aluno(a): ',bold:true,size:22}),
+            tr({text:'___________________________________________',size:22}),
+            tr({text:'   Nº: ',bold:true,size:22}),
+            tr({text:'________',size:22}),
+          ]}),
+          new Paragraph({spacing:{before:20,after:60}, children:[
+            tr({text:'Data: ',bold:true,size:22}),
+            tr({text:'___/___/______',size:22}),
+            tr({text:'   Nota: ',bold:true,size:22}),
+            tr({text:'_______________________________',size:22}),
+            tr({text:'   Visto: ',bold:true,size:22}),
+            tr({text:'___________',size:22}),
+          ]}),
+        )
+      ]}),
+    ],
+  });
+}
+
+async function exportarDocx() {
+  // Se o professor usou o arquivo da escola, processa o template
+  if (getCab().modo === 'arquivo' && state.templateFile) {
+    await exportarDocxFromTemplate();
+    return;
+  }
+  const { Document, Packer, Paragraph, TextRun, ImageRun, AlignmentType, BorderStyle } = docx;
+  const disc   = document.getElementById('f-disc').value;
+  const serie  = document.getElementById('f-serie').value;
+  const cab    = getCab();
+  const provaLines = document.getElementById('prova-text').value.split('\n');
+  const gabLines   = document.getElementById('gab-text').value.split('\n');
+
+  const children = [];
+
+  // ── Cabeçalho profissional ──
+  if (cab.modo === 'arquivo' && cab.headerImageDataUrl) {
+    // Modo arquivo: imagem do cabeçalho da escola em largura total
+    const { w: iW, h: iH } = await imgDims(cab.headerImageDataUrl);
+    const targetW = 530; // ~170mm em "pixels docx"
+    const targetH = Math.round(targetW * (iH / iW));
+    children.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [docxImgRun(cab.headerImageDataUrl, targetW, Math.min(targetH, 200))],
+      spacing: { after: 0 },
+    }));
+    // Abaixo da imagem: barra de título + info + aluno
+    children.push(buildDocxCabecalhoComplementar(cab, disc, serie));
+  } else {
+    children.push(buildDocxCabecalho(cab, disc, serie));
+  }
+  children.push(new Paragraph({ spacing:{before:320,after:0}, children:[] }));
+
+  // ── Questões ──
+  let qNum = 0;
+  for (const line of provaLines) {
+    const t = line.trim();
+    if (!t) { children.push(new Paragraph({spacing:{after:100}})); continue; }
+    const isQ   = /^\d+[\.\)]/.test(t);
+    const isAlt = /^[a-eA-E][\.\)]\s/.test(t);
+    if (isQ) {
+      qNum++;
+      children.push(new Paragraph({
+        children:[new TextRun({text:t,bold:true,size:24,font:'Arial'})],
+        spacing:{before:240,after:80},
+      }));
+      const img = state.questionImages[qNum];
+      if (img?.dataUrl) {
+        children.push(new Paragraph({
+          children:[docxImgRun(img.dataUrl,280,180)],
+          spacing:{after:100},
+        }));
+      }
+    } else if (isAlt) {
+      children.push(new Paragraph({
+        children:[new TextRun({text:t,size:22,font:'Arial'})],
+        indent:{left:560}, spacing:{after:60},
+      }));
+    } else {
+      children.push(new Paragraph({
+        children:[new TextRun({text:t,size:22,font:'Arial'})],
+        spacing:{after:80},
+      }));
+    }
+  }
+
+  // ── Gabarito (nova página) ──
+  if (gabLines.some(l=>l.trim())) {
+    children.push(new Paragraph({
+      pageBreakBefore:true,
+      children:[new TextRun({text:'GABARITO — USO EXCLUSIVO DO PROFESSOR',bold:true,size:26,font:'Arial',color:'2E4F7F'})],
+      border:{bottom:{style:BorderStyle.SINGLE,size:6,color:'2E75B6',space:1}},
+      spacing:{after:200},
+    }));
+    for (const line of gabLines) {
+      if (!line.trim()) { children.push(new Paragraph({spacing:{after:80}})); continue; }
+      children.push(new Paragraph({
+        children:[new TextRun({text:line.trim(),size:22,font:'Arial'})],
+        spacing:{after:80},
+      }));
+    }
+  }
+
+  const doc = new Document({
+    sections:[{
+      properties:{page:{size:{width:11906,height:16838},margin:{top:1134,right:1134,bottom:1134,left:1134}}},
+      children,
+    }],
+  });
+  const buf = await Packer.toBlob(doc);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(buf);
+  a.download = `prova_${disc.replace(/\s/g,'_')}_${new Date().toISOString().slice(0,10)}.docx`;
+  a.click();
+}
+
+// ── PDF EXPORT ─────────────────────────────────────────────
+async function exportarPdf() {
+  // Se o professor usou o arquivo PDF da escola, processa via pdf-lib
+  if (getCab().modo === 'arquivo' && state.templateFile) {
+    if (state.templateKind === 'pdf') {
+      await exportarPdfFromTemplate();
+      return;
+    }
+    // Se o template é .docx, orienta baixar o Word e imprimir como PDF
+    showToast('Com modelo Word (.docx), use "Baixar Word" e depois imprima como PDF no seu computador.', 'ok', 7000);
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+  const pdf  = new jsPDF({ unit:'mm', format:'a4' });
+  const disc = document.getElementById('f-disc').value;
+  const serie= document.getElementById('f-serie').value;
+  const cab  = getCab();
+  const provaLines = document.getElementById('prova-text').value.split('\n');
+  const gabLines   = document.getElementById('gab-text').value.split('\n');
+
+  const W=210, ml=15, mr=15, mt=14, usable=W-ml-mr;
+  let y = mt;
+
+  const chk = (n=8) => { if(y+n>284){pdf.addPage();y=mt;} };
+  const hline = (yy, x1=ml, x2=W-mr) => { pdf.setDrawColor(31,56,100); pdf.setLineWidth(0.3); pdf.line(x1,yy,x2,yy); };
+  const imgFmt = (url) => { const m=url.match(/data:(image\/\w+);/); return (m&&m[1].includes('jpeg'))?'JPEG':'PNG'; };
+
+  // ── Modo arquivo: imagem da escola + campos complementares ─
+  if (cab.modo === 'arquivo' && cab.headerImageDataUrl) {
+    const { w: iW, h: iH } = await imgDims(cab.headerImageDataUrl);
+    const imgH = Math.min(Math.round(usable * (iH / iW)), 50); // max 50mm
+    try {
+      pdf.addImage(cab.headerImageDataUrl, imgFmt(cab.headerImageDataUrl), ml, y, usable, imgH);
+    } catch {}
+    y += imgH;
+
+    // Barra de título
+    const titleTxt = [
+      (cab.tipoAval||'PROVA').toUpperCase(), 'DE', disc.toUpperCase(),
+      '—', [cab.bimestre, cab.ano||new Date().getFullYear()].filter(Boolean).join(' / ')
+    ].join(' ');
+    pdf.setFillColor(222,231,243); pdf.rect(ml, y, usable, 9, 'F');
+    pdf.setDrawColor(31,56,100); pdf.setLineWidth(0.3); pdf.rect(ml, y, usable, 9);
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(10); pdf.setTextColor(31,56,100);
+    pdf.text(titleTxt, ml+usable/2, y+6, {align:'center', maxWidth:usable-4});
+    y += 9;
+
+    // Linha prof
+    pdf.setDrawColor(31,56,100); pdf.rect(ml, y, usable, 8);
+    const profTxt = [`Prof(a): ${cab.prof||'_______________________'}`,
+      `Série/Turma: ${serie||'__________'}`,
+      cab.turno?`Turno: ${cab.turno}`:'',
+      cab.valor?`Valor: ${cab.valor}`:''].filter(Boolean).join('    ');
+    pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(20,20,30);
+    pdf.text(profTxt, ml+4, y+5.5, {maxWidth:usable-8});
+    y += 8;
+
+    // Campos do aluno
+    pdf.rect(ml, y, usable, 12);
+    pdf.setFontSize(8.5);
+    pdf.text('Nome do(a) Aluno(a): _________________________________________  Nº: ______', ml+4, y+4.5, {maxWidth:usable-8});
+    pdf.text('Data: ___/___/______   Nota: _______________________   Visto: ________________', ml+4, y+9.5, {maxWidth:usable-8});
+    y += 12 + 7;
+
+    // Vai direto para as questões
+    let qNum=0;
+    for(const line of provaLines){
+      const t=line.trim(); if(!t){y+=3;continue;} chk(12);
+      const isQ=/^\d+[\.\)]/.test(t), isAlt=/^[a-eA-E][\.\)]\s/.test(t);
+      if(isQ){qNum++;y+=5;pdf.setFont('helvetica','bold');pdf.setFontSize(11);pdf.setTextColor(20,20,30);const w=pdf.splitTextToSize(t,usable);pdf.text(w,ml,y);y+=w.length*6;const img=state.questionImages[qNum];if(img?.dataUrl){chk(55);try{pdf.addImage(img.dataUrl,imgFmt(img.dataUrl),ml,y,80,50);y+=56;}catch{}}}
+      else if(isAlt){pdf.setFont('helvetica','normal');pdf.setFontSize(11);pdf.setTextColor(40,40,50);const w=pdf.splitTextToSize(t,usable-10);pdf.text(w,ml+10,y);y+=w.length*5.5;}
+      else{pdf.setFont('helvetica','normal');pdf.setFontSize(11);pdf.setTextColor(40,40,50);const w=pdf.splitTextToSize(t,usable);pdf.text(w,ml,y);y+=w.length*5.5;}
+    }
+    if(gabLines.some(l=>l.trim())){pdf.addPage();y=mt;pdf.setFont('helvetica','bold');pdf.setFontSize(13);pdf.setTextColor(31,56,100);pdf.text('GABARITO — USO EXCLUSIVO DO PROFESSOR',W/2,y,{align:'center'});y+=3;hline(y);y+=8;pdf.setFont('helvetica','normal');pdf.setFontSize(11);pdf.setTextColor(30,30,50);for(const line of gabLines){if(!line.trim()){y+=3;continue;}chk(8);const w=pdf.splitTextToSize(line.trim(),usable);pdf.text(w,ml,y);y+=w.length*5.5;}}
+    pdf.save(`prova_${disc.replace(/\s/g,'_')}_${new Date().toISOString().slice(0,10)}.pdf`);
+    return;
+  }
+
+  // ── Outer border of header ──────────────────────────────
+  const BLUE=[31,56,100];
+
+  // Row heights
+  const rH1 = cab.logoDataUrl ? 22 : (cab.secretaria ? 20 : 16);
+  const rH2 = 9;   // title
+  const rH3 = 8;   // prof/turno row
+  const rH4 = 12;  // student fields
+  const totalH = rH1 + rH2 + rH3 + rH4;
+
+  pdf.setDrawColor(...BLUE); pdf.setLineWidth(0.4);
+  pdf.rect(ml, y, usable, totalH);
+
+  // ── Row 1: Logo | School info ───────────────────────────
+  const logoW = 32;
+  if (cab.logoDataUrl) {
+    try {
+      pdf.addImage(cab.logoDataUrl, imgFmt(cab.logoDataUrl), ml+2, y+2, logoW-4, rH1-4);
+    } catch {}
+    // vertical separator
+    hline(y, ml+logoW, ml+logoW); pdf.line(ml+logoW, y, ml+logoW, y+rH1);
+  }
+
+  const infoX = cab.logoDataUrl ? ml+logoW+4 : ml+4;
+  const infoW = usable - (cab.logoDataUrl ? logoW : 0) - 8;
+  let ty = y + 4;
+
+  if (cab.secretaria) {
+    pdf.setFont('helvetica','italic'); pdf.setFontSize(7.5); pdf.setTextColor(80,80,100);
+    pdf.text(cab.secretaria, infoX + infoW/2, ty, {align:'center', maxWidth:infoW}); ty += 4;
+  }
+  pdf.setFont('helvetica','bold'); pdf.setFontSize(12); pdf.setTextColor(...BLUE);
+  pdf.text(cab.escola||'ESCOLA', infoX + infoW/2, ty, {align:'center', maxWidth:infoW}); ty += 5;
+
+  const contato = [cab.endereco, cab.tel?`Tel: ${cab.tel}`:'', cab.emailEscola].filter(Boolean).join('  |  ');
+  if (contato) {
+    pdf.setFont('helvetica','normal'); pdf.setFontSize(6.5); pdf.setTextColor(100,100,100);
+    pdf.text(contato, infoX + infoW/2, ty, {align:'center', maxWidth:infoW}); ty += 4;
+  }
+
+  // ── Row 2: Title ────────────────────────────────────────
+  y += rH1;
+  hline(y);
+  const bimestre = cab.bimestre || '';
+  const anoL     = cab.ano || new Date().getFullYear();
+  const titleTxt = [
+    (cab.tipoAval||'PROVA').toUpperCase(), 'DE', disc.toUpperCase(),
+    '—', [bimestre, anoL].filter(Boolean).join(' / ')
+  ].join(' ');
+
+  pdf.setFillColor(222,231,243); pdf.rect(ml, y, usable, rH2, 'F');
+  pdf.setFont('helvetica','bold'); pdf.setFontSize(10); pdf.setTextColor(...BLUE);
+  pdf.text(titleTxt, ml + usable/2, y + rH2/2 + 1.5, {align:'center', maxWidth:usable-6});
+
+  // ── Row 3: Prof | Serie | Turno | Valor ─────────────────
+  y += rH2; hline(y);
+  const profTxt = [
+    `Prof(a): ${cab.prof||'_______________________'}`,
+    `Série/Turma: ${serie||'__________'}`,
+    cab.turno ? `Turno: ${cab.turno}` : '',
+    cab.valor ? `Valor: ${cab.valor}` : '',
+  ].filter(Boolean).join('    ');
+
+  pdf.setFont('helvetica','normal'); pdf.setFontSize(8); pdf.setTextColor(20,20,30);
+  pdf.text(profTxt, ml+4, y + rH3/2 + 1.5, {maxWidth:usable-8});
+
+  // ── Row 4: Student fields ────────────────────────────────
+  y += rH3; hline(y);
+  pdf.setFont('helvetica','normal'); pdf.setFontSize(8.5); pdf.setTextColor(20,20,30);
+  pdf.text('Nome do(a) Aluno(a): _________________________________________  Nº: ______', ml+4, y+4.5, {maxWidth:usable-8});
+  pdf.text('Data: ___/___/______   Nota: _______________________   Visto: ________________', ml+4, y+9.5, {maxWidth:usable-8});
+
+  y += rH4 + 7; // space after header
+
+  // ── Questions ───────────────────────────────────────────
+  let qNum = 0;
+  for (const line of provaLines) {
+    const t=line.trim(); if(!t){y+=3;continue;} chk(12);
+    const isQ=/^\d+[\.\)]/.test(t), isAlt=/^[a-eA-E][\.\)]\s/.test(t);
+    if (isQ) {
+      qNum++; y+=5;
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(20,20,30);
+      const w=pdf.splitTextToSize(t,usable);
+      pdf.text(w,ml,y); y+=w.length*6;
+      const img=state.questionImages[qNum];
+      if(img?.dataUrl){chk(55);try{pdf.addImage(img.dataUrl,imgFmt(img.dataUrl),ml,y,80,50);y+=56;}catch{}}
+    } else if (isAlt) {
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(11); pdf.setTextColor(40,40,50);
+      const w=pdf.splitTextToSize(t,usable-10);
+      pdf.text(w,ml+10,y); y+=w.length*5.5;
+    } else {
+      pdf.setFont('helvetica','normal'); pdf.setFontSize(11); pdf.setTextColor(40,40,50);
+      const w=pdf.splitTextToSize(t,usable);
+      pdf.text(w,ml,y); y+=w.length*5.5;
+    }
+  }
+
+  // ── Gabarito ─────────────────────────────────────────────
+  if (gabLines.some(l=>l.trim())) {
+    pdf.addPage(); y=mt;
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(13); pdf.setTextColor(...BLUE);
+    pdf.text('GABARITO — USO EXCLUSIVO DO PROFESSOR',W/2,y,{align:'center'}); y+=3;
+    hline(y); y+=8;
+    pdf.setFont('helvetica','normal'); pdf.setFontSize(11); pdf.setTextColor(30,30,50);
+    for(const line of gabLines){
+      if(!line.trim()){y+=3;continue;} chk(8);
+      const w=pdf.splitTextToSize(line.trim(),usable);
+      pdf.text(w,ml,y); y+=w.length*5.5;
+    }
+  }
+
+  pdf.save(`prova_${disc.replace(/\s/g,'_')}_${new Date().toISOString().slice(0,10)}.pdf`);
+}
+
+// ── PWA: SERVICE WORKER ─────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then(reg => {
+        // Check for updates silently
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing;
+          nw.addEventListener('statechange', () => {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+              showToast('Nova versão disponível. Recarregue a página.', 'ok', 8000);
+            }
+          });
+        });
+      })
+      .catch(() => {}); // SW errors are non-critical
+  });
+}
+
+// ── PWA: INSTALL PROMPT ─────────────────────────────────────
+let _deferredInstall = null;
+
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  _deferredInstall = e;
+  // Only show banner if user hasn't dismissed before
+  if (!localStorage.getItem('pwa-dismissed')) {
+    setTimeout(() => {
+      const banner = document.getElementById('install-banner');
+      if (banner) banner.style.display = 'flex';
+    }, 3000); // show 3s after page load
+  }
+});
+
+async function triggerInstall() {
+  if (!_deferredInstall) return;
+  _deferredInstall.prompt();
+  const { outcome } = await _deferredInstall.userChoice;
+  _deferredInstall = null;
+  document.getElementById('install-banner').style.display = 'none';
+  if (outcome === 'accepted') {
+    showToast('App instalado! Procure ProvasIA na tela inicial.', 'ok', 5000);
+  }
+}
+
+function dismissInstall() {
+  document.getElementById('install-banner').style.display = 'none';
+  localStorage.setItem('pwa-dismissed', '1');
+}
+
+window.addEventListener('appinstalled', () => {
+  document.getElementById('install-banner').style.display = 'none';
+  _deferredInstall = null;
+});
+
+// ── BOOT ───────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
