@@ -24,6 +24,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
 <style>
@@ -260,6 +261,126 @@ body { padding-bottom: env(safe-area-inset-bottom); }
   .auth-card { padding: 28px 20px; }
   .prova-card-actions { flex-direction: column; }
 }
+
+/* ── MATERIAL DO PROFESSOR ──────────────────────────────── */
+.mat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px;
+}
+.mat-card-header {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+.mat-card-icon {
+  font-size: 26px;
+  line-height: 1;
+  padding-top: 2px;
+}
+.mat-card-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--cream);
+  margin-bottom: 4px;
+}
+.mat-card-sub {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.mat-drop-zone {
+  border: 2px dashed rgba(212,168,67,0.3);
+  border-radius: 10px;
+  padding: 22px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.mat-drop-zone:hover {
+  border-color: var(--gold);
+  background: var(--goldlt);
+}
+.mat-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.mat-file-icon { font-size: 22px; flex-shrink: 0; }
+.mat-file-info { flex: 1; min-width: 0; }
+.mat-file-name {
+  font-size: 13px;
+  color: var(--cream);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mat-file-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.mat-file-remove {
+  background: rgba(220,80,80,0.12);
+  border: 1px solid rgba(220,80,80,0.3);
+  color: #e08080;
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: 11px;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.mat-file-remove:hover { background: rgba(220,80,80,0.25); }
+.mat-preview {
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+  max-height: 80px;
+  overflow: hidden;
+  line-height: 1.6;
+  position: relative;
+}
+.mat-preview::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 28px;
+  background: linear-gradient(to bottom, transparent, var(--card));
+}
+.mat-badge { background: rgba(45,106,94,0.5); color: #7ecfbd; }
+.prev-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 7px;
+}
+.prev-item-num {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(212,168,67,0.15);
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
 </style>
 </head>
 <body>
@@ -272,6 +393,9 @@ body { padding-bottom: env(safe-area-inset-bottom); }
   <!-- Nav (only when logged in) -->
   <nav class="hdr-nav" id="hdr-nav" style="display:none">
     <button class="hdr-nav-btn active" id="nav-btn-form" onclick="goTo('form')">✦ Nova Prova</button>
+    <button class="hdr-nav-btn" id="nav-btn-material" onclick="goTo('material')">
+      📚 Material <span class="hdr-badge mat-badge" id="material-badge" style="display:none">0</span>
+    </button>
     <button class="hdr-nav-btn" id="nav-btn-history" onclick="goTo('history')">
       📁 Minhas Provas <span class="hdr-badge" id="history-badge" style="display:none">0</span>
     </button>
@@ -648,6 +772,117 @@ body { padding-bottom: env(safe-area-inset-bottom); }
     </div>
   </div>
 
+  <!-- ── MATERIAL DO PROFESSOR ────────────────────────────── -->
+  <div id="view-material" style="display:none" class="anim">
+
+    <div style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:var(--gold);margin-bottom:6px">
+      📚 Material do Professor
+    </div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:28px;line-height:1.7">
+      Envie o material da escola e suas provas anteriores. A IA vai <strong style="color:var(--cream)">basear as questões no conteúdo programático</strong> e <strong style="color:var(--cream)">replicar seu estilo de construção</strong>.
+    </div>
+
+    <div class="g2" style="gap:24px;align-items:start">
+
+      <!-- ── MANUAL DO PROFESSOR ── -->
+      <div class="mat-card">
+        <div class="mat-card-header">
+          <div class="mat-card-icon">📖</div>
+          <div>
+            <div class="mat-card-title">Manual / Currículo da Escola</div>
+            <div class="mat-card-sub">A IA usa como base para alinhar as questões ao conteúdo programático da escola</div>
+          </div>
+        </div>
+
+        <!-- Estado: vazio -->
+        <div id="manual-drop-empty">
+          <div class="mat-drop-zone" id="manual-drop-zone"
+            onclick="document.getElementById('manual-file-input').click()"
+            ondragover="event.preventDefault()"
+            ondrop="event.preventDefault(); handleManualDrop(event)">
+            <div style="font-size:28px;margin-bottom:8px">📋</div>
+            <div style="font-size:13px;color:var(--cream);font-weight:600;margin-bottom:4px">Arraste ou clique para enviar</div>
+            <div class="drop-formats"><span class="fmt-badge">📝 .docx</span><span class="fmt-badge">📄 .pdf</span></div>
+          </div>
+          <input type="file" id="manual-file-input"
+            accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
+            style="display:none" onchange="handleManualFile(this)">
+        </div>
+
+        <!-- Estado: carregado -->
+        <div id="manual-loaded" style="display:none">
+          <div class="mat-file-row">
+            <div class="mat-file-icon" id="manual-file-icon">📝</div>
+            <div class="mat-file-info">
+              <div class="mat-file-name" id="manual-file-name">—</div>
+              <div class="mat-file-meta" id="manual-file-meta">—</div>
+            </div>
+            <button class="mat-file-remove" onclick="removeManual()" title="Remover">✕</button>
+          </div>
+          <div class="mat-preview" id="manual-preview"></div>
+        </div>
+
+        <!-- Estado: processando -->
+        <div id="manual-processing" style="display:none">
+          <div style="text-align:center;padding:18px;color:var(--muted);font-size:13px">
+            <div class="stream-cursor" style="display:inline-block;margin-right:6px"></div>
+            Extraindo texto do arquivo...
+          </div>
+        </div>
+      </div>
+
+      <!-- ── PROVAS ANTERIORES ── -->
+      <div class="mat-card">
+        <div class="mat-card-header">
+          <div class="mat-card-icon">📋</div>
+          <div>
+            <div class="mat-card-title">Minhas Provas Anteriores</div>
+            <div class="mat-card-sub">A IA analisa seu estilo de construção e replica o mesmo padrão nas novas provas</div>
+          </div>
+        </div>
+
+        <div id="prev-drop-empty">
+          <div class="mat-drop-zone" id="prev-drop-zone"
+            onclick="document.getElementById('prev-file-input').click()"
+            ondragover="event.preventDefault()"
+            ondrop="event.preventDefault(); handlePrevDrop(event)">
+            <div style="font-size:28px;margin-bottom:8px">📁</div>
+            <div style="font-size:13px;color:var(--cream);font-weight:600;margin-bottom:4px">Arraste ou clique para enviar</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">Até 5 arquivos</div>
+            <div class="drop-formats"><span class="fmt-badge">📝 .docx</span><span class="fmt-badge">📄 .pdf</span></div>
+          </div>
+          <input type="file" id="prev-file-input"
+            accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
+            style="display:none" onchange="handlePrevFiles(this)" multiple>
+        </div>
+
+        <div id="prev-list" style="display:none">
+          <div id="prev-items"></div>
+          <button class="btn-sec" style="margin-top:12px;width:100%;font-size:12px"
+            onclick="document.getElementById('prev-file-input').click()">
+            + Adicionar mais (máx. 5)
+          </button>
+        </div>
+      </div>
+
+    </div><!-- /g2 -->
+
+    <!-- Status de contexto da IA -->
+    <div id="mat-ai-status" style="margin-top:24px;display:none">
+      <div style="background:rgba(45,106,94,0.12);border:1px solid rgba(45,106,94,0.3);border-radius:10px;padding:16px 20px">
+        <div style="font-size:12px;color:#7ecfbd;font-weight:700;margin-bottom:10px">🤖 Contexto carregado para a IA</div>
+        <div id="mat-ai-status-text" style="font-size:12px;color:var(--muted);line-height:1.8"></div>
+      </div>
+    </div>
+
+    <div style="margin-top:24px">
+      <button class="btn-gold" onclick="goTo('form')" style="padding:14px 32px">
+        ✦ Gerar Nova Prova com este material
+      </button>
+    </div>
+
+  </div><!-- /view-material -->
+
 </div><!-- /main -->
 
 <!-- TOAST -->
@@ -732,7 +967,7 @@ function onLoggedIn(session) {
   if (state.currentView === 'auth') {
     goTo('form');
     // Small delay so DOM is visible before loading values
-    setTimeout(() => { loadCabecalhoLocal(); updateHdrPreview(); }, 50);
+    setTimeout(() => { loadCabecalhoLocal(); updateHdrPreview(); loadMaterialLocal(); }, 50);
   }
 }
 
@@ -824,14 +1059,16 @@ function translateAuthError(msg) {
 // ── NAVIGATION ─────────────────────────────────────────────
 function goTo(view) {
   if (!currentSession && view !== 'auth') { showView('auth'); return; }
-  if (view === 'history') loadHistory();
+  if (view === 'history')  loadHistory();
+  if (view === 'material') updateMatAiStatus();
   showView(view);
-  document.getElementById('nav-btn-form').classList.toggle('active', view === 'form');
-  document.getElementById('nav-btn-history').classList.toggle('active', view === 'history');
+  document.getElementById('nav-btn-form').classList.toggle('active',     view === 'form');
+  document.getElementById('nav-btn-material').classList.toggle('active', view === 'material');
+  document.getElementById('nav-btn-history').classList.toggle('active',  view === 'history');
 }
 
 function showView(name) {
-  ['auth','form','loading','result','history'].forEach(v => {
+  ['auth','form','loading','result','history','material'].forEach(v => {
     const el = document.getElementById('view-' + v);
     if (el) el.style.display = v === name ? '' : 'none';
   });
@@ -1136,6 +1373,20 @@ function buildPrompt() {
     discursiva: 'Apenas questões discursivas/abertas',
   }[state.tipo];
   const difLabel = { facil:'Fácil', medio:'Médio', dificil:'Difícil', mista:'Variada (misture níveis)' }[state.dif];
+  // Contexto do material do professor
+  const manualEntry = JSON.parse(localStorage.getItem(MAT_MANUAL_KEY) || 'null');
+  const prevExams   = getPrevExams();
+
+  const manualCtx = manualEntry
+    ? `\n\n═══ MATERIAL CURRICULAR DA ESCOLA (use como BASE dos temas e conteúdos) ═══\n${manualEntry.text.slice(0, MAX_CTX_CHARS)}\n[fim do material]`
+    : '';
+
+  const styleCtx = prevExams.length > 0
+    ? `\n\n═══ ESTILO DE PROVAS DO PROFESSOR (REPLIQUE EXATAMENTE este padrão de formato, linguagem, nível de exigência e estrutura das questões) ═══\n${prevExams.map((e, i) => `--- Prova ${i + 1}: ${e.name} ---\n${e.text.slice(0, MAX_CTX_CHARS)}`).join('\n\n')}\n[fim dos exemplos]`
+    : '';
+
+  const hasContext = manualCtx || styleCtx;
+
   return `Você é um professor especialista em ${disc}. Crie uma prova escolar completa e bem elaborada.
 
 ESPECIFICAÇÕES:
@@ -1146,6 +1397,9 @@ ESPECIFICAÇÕES:
 - Dificuldade: ${difLabel}
 - Número de questões: ${state.numQ}
 ${inst ? `- Instruções especiais: ${inst}` : ''}
+${hasContext ? `\nINSTRUÇÕES IMPORTANTES:
+${manualCtx ? '- Baseie os temas e o vocabulário das questões no material curricular fornecido abaixo.' : ''}
+${styleCtx  ? '- Replique FIELMENTE o estilo, formato e padrão de construção das provas anteriores do professor fornecidas abaixo.' : ''}` : ''}
 
 FORMATO OBRIGATÓRIO DA SAÍDA:
 1. Liste as questões numeradas: "1. enunciado da questão"
@@ -1155,8 +1409,8 @@ FORMATO OBRIGATÓRIO DA SAÍDA:
 5. NÃO inclua cabeçalho
 6. Após todas as questões, escreva exatamente: ---GABARITO---
 7. Depois liste o gabarito comentado de cada questão
-
-Use contextos do cotidiano, seja criativo, avalie diferentes níveis cognitivos.`;
+${manualCtx || styleCtx ? '' : '\nUse contextos do cotidiano, seja criativo, avalie diferentes níveis cognitivos.'}
+${manualCtx}${styleCtx}`;
 }
 
 // ── STREAMING STATS ────────────────────────────────────────
@@ -1444,6 +1698,221 @@ function showToast(msg, type = 'error', duration = 4000) {
   t.style.display = 'block';
   clearTimeout(t._tid);
   t._tid = setTimeout(() => { t.style.display = 'none'; }, duration);
+}
+
+// ══════════════════════════════════════════════════════════════
+// MATERIAL DO PROFESSOR — localStorage keys
+// ══════════════════════════════════════════════════════════════
+const MAT_MANUAL_KEY   = 'provasIA-teacherManual-v1';
+const MAT_PREVEXAM_KEY = 'provasIA-prevExams-v1';
+const MAX_PREV_EXAMS   = 5;
+const MAX_CTX_CHARS    = 3500; // máx de caracteres enviados à IA por arquivo
+
+// ── Extrai texto de um .docx usando JSZip ──────────────────
+async function extractDocxText(file) {
+  const ab  = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(ab);
+  const xml = await zip.file('word/document.xml').async('string');
+  // Pega somente o conteúdo dos elementos <w:t>
+  const matches = xml.match(/<w:t[^>]*>([^<]+)<\/w:t>/g) || [];
+  return matches
+    .map(m => m.replace(/<[^>]+>/g, ''))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// ── Extrai texto de um .pdf usando pdf.js ──────────────────
+async function extractPdfText(file) {
+  if (!window.pdfjsLib) throw new Error('pdf.js não carregado');
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  const ab  = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+  let text  = '';
+  const maxPages = Math.min(pdf.numPages, 20); // limita a 20 páginas
+  for (let i = 1; i <= maxPages; i++) {
+    const page    = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map(s => s.str).join(' ') + '\n';
+  }
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+// ── Extrai texto de qualquer arquivo suportado ─────────────
+async function extractFileText(file) {
+  const kind = getFileKind(file);
+  if (!kind) throw new Error('Formato não suportado');
+  return kind === 'docx' ? await extractDocxText(file) : await extractPdfText(file);
+}
+
+// ── MANUAL DO PROFESSOR ────────────────────────────────────
+async function handleManualDrop(ev) {
+  const file = ev.dataTransfer.files[0];
+  if (file) await processManualFile(file);
+}
+async function handleManualFile(input) {
+  const file = input.files[0];
+  if (file) await processManualFile(file);
+  input.value = '';
+}
+
+async function processManualFile(file) {
+  const kind = getFileKind(file);
+  if (!kind) { showToast('Envie apenas .docx ou .pdf', 'error'); return; }
+
+  document.getElementById('manual-drop-empty').style.display   = 'none';
+  document.getElementById('manual-loaded').style.display       = 'none';
+  document.getElementById('manual-processing').style.display   = '';
+
+  try {
+    const text = await extractFileText(file);
+    if (!text || text.length < 50) throw new Error('Não foi possível extrair texto. Verifique se o arquivo não está protegido ou é apenas imagem.');
+
+    const entry = { name: file.name, size: file.size, kind, text };
+    localStorage.setItem(MAT_MANUAL_KEY, JSON.stringify(entry));
+    renderManualLoaded(entry);
+    updateMatAiStatus();
+    showToast('Manual carregado! A IA usará como referência.', 'ok', 4000);
+  } catch (e) {
+    document.getElementById('manual-drop-empty').style.display = '';
+    showToast('Erro ao processar: ' + e.message, 'error', 6000);
+  } finally {
+    document.getElementById('manual-processing').style.display = 'none';
+  }
+}
+
+function renderManualLoaded(entry) {
+  const icon = entry.kind === 'docx' ? '📝' : '📄';
+  document.getElementById('manual-drop-empty').style.display = 'none';
+  document.getElementById('manual-loaded').style.display     = '';
+  document.getElementById('manual-file-icon').textContent    = icon;
+  document.getElementById('manual-file-name').textContent    = entry.name;
+  document.getElementById('manual-file-meta').textContent    =
+    `${formatBytes(entry.size)} · ${entry.text.length.toLocaleString('pt-BR')} caracteres extraídos`;
+  document.getElementById('manual-preview').textContent      = entry.text.slice(0, 400);
+}
+
+function removeManual() {
+  localStorage.removeItem(MAT_MANUAL_KEY);
+  document.getElementById('manual-loaded').style.display     = 'none';
+  document.getElementById('manual-drop-empty').style.display = '';
+  updateMatAiStatus();
+  showToast('Manual removido.', 'ok');
+}
+
+// ── PROVAS ANTERIORES ──────────────────────────────────────
+function getPrevExams() {
+  try { return JSON.parse(localStorage.getItem(MAT_PREVEXAM_KEY) || '[]'); } catch { return []; }
+}
+function savePrevExams(arr) {
+  localStorage.setItem(MAT_PREVEXAM_KEY, JSON.stringify(arr));
+}
+
+async function handlePrevDrop(ev) {
+  for (const file of ev.dataTransfer.files) await processPrevFile(file);
+}
+async function handlePrevFiles(input) {
+  for (const file of input.files) await processPrevFile(file);
+  input.value = '';
+}
+
+async function processPrevFile(file) {
+  const kind = getFileKind(file);
+  if (!kind) { showToast(`"${file.name}" não é .docx ou .pdf`, 'error'); return; }
+
+  const exams = getPrevExams();
+  if (exams.length >= MAX_PREV_EXAMS) {
+    showToast(`Máximo de ${MAX_PREV_EXAMS} provas atingido. Remova uma antes de adicionar.`, 'error', 5000);
+    return;
+  }
+  // Evita duplicatas pelo nome
+  if (exams.some(e => e.name === file.name)) {
+    showToast(`"${file.name}" já foi adicionado.`, 'error'); return;
+  }
+
+  showToast(`Processando "${file.name}"...`, 'ok', 3000);
+  try {
+    const text  = await extractFileText(file);
+    if (!text || text.length < 50) throw new Error('Texto não extraído');
+    exams.push({ name: file.name, size: file.size, kind, text });
+    savePrevExams(exams);
+    renderPrevExams();
+    updateMatAiStatus();
+    showToast(`"${file.name}" adicionado!`, 'ok', 3000);
+  } catch (e) {
+    showToast(`Erro em "${file.name}": ${e.message}`, 'error', 5000);
+  }
+}
+
+function removePrevExam(index) {
+  const exams = getPrevExams();
+  exams.splice(index, 1);
+  savePrevExams(exams);
+  renderPrevExams();
+  updateMatAiStatus();
+}
+
+function renderPrevExams() {
+  const exams = getPrevExams();
+  const list  = document.getElementById('prev-list');
+  const empty = document.getElementById('prev-drop-empty');
+  const items = document.getElementById('prev-items');
+
+  if (exams.length === 0) {
+    list.style.display  = 'none';
+    empty.style.display = '';
+    return;
+  }
+  list.style.display  = '';
+  empty.style.display = 'none';
+  items.innerHTML = exams.map((e, i) => `
+    <div class="prev-item">
+      <div class="prev-item-num">${i + 1}</div>
+      <div class="mat-file-icon">${e.kind === 'docx' ? '📝' : '📄'}</div>
+      <div class="mat-file-info">
+        <div class="mat-file-name">${e.name}</div>
+        <div class="mat-file-meta">${formatBytes(e.size)} · ${e.text.length.toLocaleString('pt-BR')} chars</div>
+      </div>
+      <button class="mat-file-remove" onclick="removePrevExam(${i})" title="Remover">✕</button>
+    </div>
+  `).join('');
+
+  // Badge na nav
+  const badge = document.getElementById('material-badge');
+  badge.style.display  = '';
+  badge.textContent    = exams.length;
+}
+
+// ── Status do contexto IA ──────────────────────────────────
+function updateMatAiStatus() {
+  const manual = JSON.parse(localStorage.getItem(MAT_MANUAL_KEY) || 'null');
+  const exams  = getPrevExams();
+  const status = document.getElementById('mat-ai-status');
+  const text   = document.getElementById('mat-ai-status-text');
+
+  if (!manual && exams.length === 0) { status.style.display = 'none'; return; }
+  status.style.display = '';
+
+  const lines = [];
+  if (manual) lines.push(`✅ <strong style="color:var(--cream)">Manual da escola</strong> — ${manual.text.length.toLocaleString('pt-BR')} chars (${Math.min(MAX_CTX_CHARS, manual.text.length).toLocaleString('pt-BR')} enviados à IA)`);
+  if (exams.length > 0) lines.push(`✅ <strong style="color:var(--cream)">${exams.length} prova(s) anterior(es)</strong> — a IA vai replicar o estilo de construção`);
+  text.innerHTML = lines.join('<br>');
+
+  // Badge na nav
+  const badge = document.getElementById('material-badge');
+  const total = (manual ? 1 : 0) + exams.length;
+  badge.style.display = total > 0 ? '' : 'none';
+  badge.textContent   = total;
+}
+
+// ── Carrega dados salvos ao iniciar ───────────────────────
+function loadMaterialLocal() {
+  const manual = JSON.parse(localStorage.getItem(MAT_MANUAL_KEY) || 'null');
+  if (manual) renderManualLoaded(manual);
+  renderPrevExams();
+  updateMatAiStatus();
 }
 
 // ══════════════════════════════════════════════════════════════
