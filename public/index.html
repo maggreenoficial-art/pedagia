@@ -1982,6 +1982,75 @@ function showToast(msg, type = 'error', duration = 4000) {
 // ══════════════════════════════════════════════════════════════
 const TPL_KEY = 'provasIA-formatTemplate-v1';
 
+// ── Template padrão: Escola Estadual Rui Barbosa / MS ──────
+// Extraído da prova "9º ANO - AV1º BGEO" (formato oficial MS)
+const DEFAULT_FORMAT_TEMPLATE = {
+  name: '📌 Padrão Escola Estadual — MS (Rui Barbosa)',
+  size: 0,
+  kind: 'builtin',
+  builtin: true,
+  text: `FORMATO OFICIAL DE PROVA — ESCOLA ESTADUAL (PADRÃO MATO GROSSO DO SUL)
+
+CABEÇALHO (repetido no topo de cada página impressa):
+GOVERNO DO ESTADO DE MATO GROSSO DO SUL
+SECRETARIA DE ESTADO DE EDUCAÇÃO
+[NOME DA ESCOLA]
+[Endereço, Cidade/MS — Fone: (67) XXXX-XXXX]
+
+CAMPOS DO ESTUDANTE:
+PROFESSOR(A): _____________________  DISCIPLINA: ___________________
+ESTUDANTE: ___________________________________  Nº: ___  ANO/ENSINO: ___
+"AVALIAÇÃO Xº BIMESTRE" (De 0 a X pontos)  NOTA: _______
+
+ESTRUTURA DAS QUESTÕES:
+- Total recomendado: 20 questões distribuídas em 3 páginas
+- Distribuição padrão: ~17 questões de múltipla escolha + 3 questões discursivas/analíticas
+- Numeração: "1. [enunciado]" — número seguido de ponto, SEM parêntese
+- Alternativas de múltipla escolha: letras minúsculas com parêntese — a)  b)  c)  d)  e)
+- Cada alternativa em linha própria; se longa, continua indentada na linha seguinte
+- Questões discursivas: enunciado + 10 a 14 linhas de resposta (_____________________)
+- Questões com imagem/mapa/gráfico: iniciar com "De acordo com [a imagem/o mapa/o gráfico] abaixo..."
+- Questões analíticas de charge/mapa: pedir para o aluno "indicar elementos" ou "relacionar com o contexto"
+
+EXEMPLO — QUESTÃO DE MÚLTIPLA ESCOLHA:
+1. O capitalismo é um sistema econômico caracterizado principalmente por:
+a) propriedade coletiva dos meios de produção e controle social.
+b) ausência de lucro e mercado consumidor.
+c) propriedade privada, busca do lucro e economia de mercado.
+d) controle total do Estado sobre todas as atividades.
+e) fim das classes sociais.
+
+EXEMPLO — QUESTÃO DISCURSIVA COM ANÁLISE:
+10. Explique as razões pelas quais a cidade de Berlim foi dividida por meio da construção de um muro, relacionando esse acontecimento com o contexto marcado pela Ordem Mundial Bipolar.
+_________________________________________
+_________________________________________
+_________________________________________
+_________________________________________
+_________________________________________
+_________________________________________
+_________________________________________
+_________________________________________
+_________________________________________
+_________________________________________
+
+FRASE DE ENCERRAMENTO (obrigatória ao final da última questão):
+"Leia com atenção, pense com o coração. Com esforço e confiança, você alcança. Boa avaliação."
+
+REGRAS DE LINGUAGEM E CONSTRUÇÃO:
+- Linguagem clara e acessível ao nível da série/ano
+- Enunciados objetivos; alternativas plausíveis, sem distratores óbvios
+- Questões discursivas exigem análise, relação entre conceitos ou interpretação de elemento visual
+- Manter coerência com o conteúdo programático fornecido`,
+};
+
+// Aplica o template padrão se ainda não houver um customizado
+function applyDefaultTemplateIfNeeded() {
+  const existing = localStorage.getItem(TPL_KEY);
+  if (!existing) {
+    localStorage.setItem(TPL_KEY, JSON.stringify(DEFAULT_FORMAT_TEMPLATE));
+  }
+}
+
 async function loadTemplateFile(input) {
   const file = input.files[0];
   if (!file) return;
@@ -2009,10 +2078,12 @@ function renderTemplateBar(entry) {
   }
   document.getElementById('tpl-empty').style.display    = 'none';
   document.getElementById('tpl-loaded').style.display   = '';
-  document.getElementById('tpl-icon').textContent       = entry.kind === 'docx' ? '📝' : '📄';
+  document.getElementById('tpl-icon').textContent       =
+    entry.builtin ? '📌' : (entry.kind === 'docx' ? '📝' : '📄');
   document.getElementById('tpl-name').textContent       = entry.name;
-  document.getElementById('tpl-sub').textContent        =
-    `${formatBytes(entry.size)} · ${entry.text.length.toLocaleString('pt-BR')} chars extraídos`;
+  document.getElementById('tpl-sub').textContent        = entry.builtin
+    ? 'Template padrão do sistema — Escola Estadual MS · clique ✕ para substituir pelo seu'
+    : `${formatBytes(entry.size)} · ${entry.text.length.toLocaleString('pt-BR')} chars extraídos`;
 }
 
 function clearTemplate() {
@@ -2022,6 +2093,7 @@ function clearTemplate() {
 }
 
 function loadTemplateLocal() {
+  applyDefaultTemplateIfNeeded(); // garante template padrão na primeira visita
   const t = JSON.parse(localStorage.getItem(TPL_KEY) || 'null');
   renderTemplateBar(t);
 }
