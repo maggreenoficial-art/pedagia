@@ -16,6 +16,7 @@ const CDN_HOSTS = [
   'cdnjs.cloudflare.com',
   'cdn.jsdelivr.net',
   'unpkg.com',
+  'mozilla.github.io',
   'fonts.googleapis.com',
   'fonts.gstatic.com',
 ];
