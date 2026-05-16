@@ -1,5 +1,5 @@
 // ── Gerador de Provas PWA — Service Worker ──────────────────
-const CACHE   = 'provas-ia-v1';
+const CACHE   = 'provas-ia-v3';   // bump para forçar atualização
 const APP_URL = '/';
 
 // Assets to pre-cache on install
@@ -11,12 +11,21 @@ const PRECACHE = [
 ];
 
 // External CDN libs to cache on first fetch
-const CDN_CACHE = 'provas-ia-cdn-v1';
+const CDN_CACHE = 'provas-ia-cdn-v3';
 const CDN_HOSTS = [
   'cdnjs.cloudflare.com',
   'cdn.jsdelivr.net',
+  'unpkg.com',
   'fonts.googleapis.com',
   'fonts.gstatic.com',
+];
+
+// Hosts que NUNCA devem ser interceptados pelo SW
+// (re-fetch cross-origin pelo SW causa ERR_FAILED em alguns browsers)
+const PASSTHROUGH_HOSTS = [
+  'supabase.co',
+  'supabase.io',
+  'openrouter.ai',
 ];
 
 // ── Install: pre-cache app shell ─────────────────────────────
@@ -46,14 +55,14 @@ self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // 1. API calls → always network (never cache)
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(fetch(request));
-    return;
+  // 1. Hosts externos críticos (Supabase, OpenRouter) → NÃO interceptar.
+  //    Deixar o browser resolver diretamente evita ERR_FAILED em re-fetch cross-origin.
+  if (PASSTHROUGH_HOSTS.some(h => url.hostname.includes(h))) {
+    return; // sem event.respondWith → browser resolve nativamente
   }
 
-  // 2. Supabase & auth requests → always network
-  if (url.hostname.includes('supabase.co') || url.hostname.includes('openrouter.ai')) {
+  // 2. Chamadas à nossa API → sempre rede, nunca cache
+  if (url.pathname.startsWith('/api/')) {
     event.respondWith(fetch(request));
     return;
   }
