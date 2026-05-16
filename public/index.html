@@ -25,6 +25,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
 <style>
@@ -369,18 +370,73 @@ body { padding-bottom: env(safe-area-inset-bottom); }
   margin-bottom: 7px;
 }
 .prev-item-num {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: rgba(212,168,67,0.15);
-  color: var(--gold);
-  font-size: 11px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: rgba(212,168,67,0.15); color: var(--gold);
+  font-size: 11px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
+
+/* ── TEMPLATE BADGE no form ───────────────────────────────── */
+.tpl-bar {
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(212,168,67,0.07);
+  border: 1px solid rgba(212,168,67,0.2);
+  border-radius: 9px; padding: 10px 14px; margin-top: 14px; cursor: pointer;
+  transition: all 0.18s;
+}
+.tpl-bar:hover { border-color: var(--gold); background: var(--goldlt); }
+.tpl-bar-icon  { font-size: 18px; flex-shrink: 0; }
+.tpl-bar-info  { flex: 1; min-width: 0; }
+.tpl-bar-name  { font-size: 12px; color: var(--cream); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tpl-bar-sub   { font-size: 11px; color: var(--muted); }
+.tpl-bar-clear { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; }
+.tpl-bar-clear:hover { color: #e08080; }
+
+/* ── DO MANUAL — view ─────────────────────────────────────── */
+.fm-topic-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px; cursor: pointer;
+  transition: background 0.15s;
+}
+.fm-topic-item:hover { background: rgba(255,255,255,0.04); }
+.fm-topic-item input[type=checkbox] { accent-color: var(--gold); width: 15px; height: 15px; flex-shrink: 0; }
+.fm-topic-text { font-size: 13px; color: var(--cream); flex: 1; }
+.fm-topic-level { font-size: 10px; color: var(--muted); margin-left: auto; }
+.fm-topic-sep { font-size: 11px; color: var(--gold); font-weight: 700; padding: 10px 12px 4px; letter-spacing: 0.5px; }
+.fm-no-manual {
+  text-align: center; padding: 48px 24px;
+  border: 2px dashed rgba(212,168,67,0.2); border-radius: 14px;
+}
+
+/* ── IMAGENS do manual ────────────────────────────────────── */
+.img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px,1fr)); gap: 10px; }
+.img-thumb {
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  cursor: pointer; position: relative; background: rgba(255,255,255,0.03);
+  transition: border-color 0.15s;
+}
+.img-thumb:hover { border-color: var(--gold); }
+.img-thumb img  { width: 100%; display: block; aspect-ratio: 4/3; object-fit: cover; }
+.img-thumb .img-sel {
+  position: absolute; top: 4px; right: 4px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--gold); display: none;
+  align-items: center; justify-content: center; font-size: 10px; color: #1a1a2e;
+}
+.img-thumb.selected { border-color: var(--gold); }
+.img-thumb.selected .img-sel { display: flex; }
+
+/* ── CHART CREATOR ────────────────────────────────────────── */
+.chart-creator { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media(max-width:700px){ .chart-creator { grid-template-columns: 1fr; } }
+.chart-data-row {
+  display: flex; gap: 8px; margin-bottom: 7px;
+}
+.chart-data-row input { flex: 1; font-size: 12px; padding: 7px 10px; }
+.chart-data-row input:first-child { flex: 1.5; }
+.chart-del { background: transparent; border: 1px solid rgba(220,80,80,0.3); color: #e08080; border-radius: 6px; width: 28px; cursor: pointer; font-size: 12px; transition: all 0.15s; }
+.chart-del:hover { background: rgba(220,80,80,0.15); }
+#chart-preview-canvas { width: 100% !important; border-radius: 10px; }
 </style>
 </head>
 <body>
@@ -395,6 +451,9 @@ body { padding-bottom: env(safe-area-inset-bottom); }
     <button class="hdr-nav-btn active" id="nav-btn-form" onclick="goTo('form')">✦ Nova Prova</button>
     <button class="hdr-nav-btn" id="nav-btn-material" onclick="goTo('material')">
       📚 Material <span class="hdr-badge mat-badge" id="material-badge" style="display:none">0</span>
+    </button>
+    <button class="hdr-nav-btn" id="nav-btn-from-material" onclick="goTo('from-material')">
+      📖 Do Manual
     </button>
     <button class="hdr-nav-btn" id="nav-btn-history" onclick="goTo('history')">
       📁 Minhas Provas <span class="hdr-badge" id="history-badge" style="display:none">0</span>
@@ -658,6 +717,45 @@ body { padding-bottom: env(safe-area-inset-bottom); }
         <label>Instruções especiais (opcional)</label>
         <textarea id="f-instrucoes" rows="2" placeholder="Ex: inclua pelo menos 2 questões com interpretação de texto, use linguagem acessível..."></textarea>
       </div>
+
+      <!-- ── TEMPLATE DE FORMATO ── -->
+      <div style="margin-top:18px">
+        <label style="display:flex;align-items:center;gap:8px">
+          📋 Template de Formato
+          <span style="font-size:10px;font-weight:400;color:var(--muted);background:rgba(212,168,67,0.1);padding:2px 7px;border-radius:20px">opcional</span>
+        </label>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">
+          Envie uma prova sua em Word — a IA replicará exatamente o mesmo padrão de construção
+        </div>
+
+        <!-- Estado: sem template -->
+        <div id="tpl-empty">
+          <div class="tpl-bar" onclick="document.getElementById('tpl-file-input').click()">
+            <div class="tpl-bar-icon">📂</div>
+            <div class="tpl-bar-info">
+              <div class="tpl-bar-name" style="color:var(--muted)">Nenhum template carregado</div>
+              <div class="tpl-bar-sub">Clique para carregar .docx ou .pdf</div>
+            </div>
+            <span style="font-size:11px;color:var(--gold)">+ Carregar</span>
+          </div>
+        </div>
+
+        <!-- Estado: com template -->
+        <div id="tpl-loaded" style="display:none">
+          <div class="tpl-bar">
+            <div class="tpl-bar-icon" id="tpl-icon">📝</div>
+            <div class="tpl-bar-info">
+              <div class="tpl-bar-name" id="tpl-name">—</div>
+              <div class="tpl-bar-sub" id="tpl-sub">—</div>
+            </div>
+            <button class="tpl-bar-clear" onclick="clearTemplate()" title="Remover template">✕</button>
+          </div>
+        </div>
+
+        <input type="file" id="tpl-file-input"
+          accept=".docx,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
+          style="display:none" onchange="loadTemplateFile(this)">
+      </div>
     </div>
 
     <div class="card">
@@ -881,7 +979,183 @@ body { padding-bottom: env(safe-area-inset-bottom); }
       </button>
     </div>
 
+    <!-- ── IMAGENS DO MANUAL ─────────────────────────────────── -->
+    <div style="margin-top:28px">
+      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;color:var(--gold);margin-bottom:6px">
+        🖼️ Conteúdo Visual do Manual
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:16px">
+        Imagens extraídas do arquivo carregado. Selecione as que deseja incluir nas provas.
+      </div>
+      <div id="mat-images-empty" style="font-size:12px;color:var(--muted);padding:14px;text-align:center;border:1px dashed rgba(255,255,255,0.08);border-radius:8px">
+        Carregue um manual acima para extrair as imagens
+      </div>
+      <div id="mat-images-grid" class="img-grid" style="display:none"></div>
+      <div id="mat-images-extracting" style="display:none;text-align:center;padding:14px;font-size:12px;color:var(--muted)">
+        <span class="stream-cursor" style="display:inline-block;margin-right:6px"></span> Extraindo imagens...
+      </div>
+    </div>
+
+    <!-- ── CRIADOR DE GRÁFICOS ────────────────────────────────── -->
+    <div style="margin-top:28px">
+      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;color:var(--gold);margin-bottom:6px">
+        📊 Criador de Gráficos
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:16px">
+        Crie gráficos para incluir nas provas. Baixe como imagem PNG.
+      </div>
+      <div class="mat-card">
+        <div class="chart-creator">
+
+          <!-- Painel de dados -->
+          <div>
+            <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+              <select id="chart-type" onchange="renderChartPreview()" style="flex:1;min-width:120px;font-size:13px">
+                <option value="bar">📊 Barras</option>
+                <option value="horizontalBar">📊 Barras Horizontais</option>
+                <option value="line">📈 Linha</option>
+                <option value="pie">🥧 Pizza</option>
+                <option value="doughnut">🍩 Rosca</option>
+              </select>
+              <input type="text" id="chart-title" placeholder="Título do gráfico" style="flex:2;min-width:160px;font-size:13px" oninput="renderChartPreview()">
+            </div>
+
+            <div style="font-size:11px;color:var(--muted);margin-bottom:8px;font-weight:600">DADOS</div>
+            <div id="chart-rows"></div>
+            <button class="btn-sec" onclick="addChartRow()" style="width:100%;font-size:12px;margin-top:6px">+ Adicionar linha</button>
+
+            <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn-gold" onclick="renderChartPreview()" style="flex:1;font-size:12px;padding:10px">↻ Atualizar</button>
+              <button class="btn-sec" onclick="downloadChart()" style="flex:1;font-size:12px;padding:10px">⬇ Baixar PNG</button>
+            </div>
+          </div>
+
+          <!-- Preview -->
+          <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:10px;padding:14px;display:flex;align-items:center;justify-content:center;min-height:220px">
+            <canvas id="chart-preview-canvas"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /view-material -->
+
+  <!-- ── DO MANUAL — geração direta a partir do material ─── -->
+  <div id="view-from-material" style="display:none" class="anim">
+
+    <div style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:var(--gold);margin-bottom:6px">
+      📖 Gerar Prova do Manual
+    </div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:24px;line-height:1.7">
+      A IA vai extrair os tópicos do seu manual e criar questões diretamente a partir desse conteúdo.
+    </div>
+
+    <!-- Sem manual carregado -->
+    <div id="fm-no-manual" class="fm-no-manual">
+      <div style="font-size:42px;margin-bottom:12px">📚</div>
+      <div style="font-size:16px;color:var(--cream);font-weight:600;margin-bottom:8px">Nenhum manual carregado</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:20px">Vá até a aba Material e envie o manual da escola primeiro</div>
+      <button class="btn-gold" onclick="goTo('material')" style="padding:12px 28px">📚 Ir para Material</button>
+    </div>
+
+    <!-- Conteúdo quando manual está carregado -->
+    <div id="fm-content" style="display:none">
+
+      <div class="g2" style="gap:20px;align-items:start">
+
+        <!-- Tópicos do manual -->
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div class="card-title" style="margin:0">📑 Tópicos do Manual</div>
+            <div style="display:flex;gap:6px">
+              <button class="btn-sec" style="font-size:11px;padding:5px 10px" onclick="selectAllTopics(true)">Todos</button>
+              <button class="btn-sec" style="font-size:11px;padding:5px 10px" onclick="selectAllTopics(false)">Nenhum</button>
+            </div>
+          </div>
+          <div id="fm-topics-list" style="max-height:340px;overflow-y:auto"></div>
+          <div style="margin-top:10px;font-size:11px;color:var(--muted)" id="fm-topics-count">0 tópico(s) selecionado(s)</div>
+        </div>
+
+        <!-- Configurações da prova -->
+        <div>
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-title">🎓 Configuração</div>
+            <div class="g2" style="margin-bottom:12px">
+              <div>
+                <label>Disciplina</label>
+                <select id="fm-disc">
+                  <option value="">Selecione...</option>
+                  <option>Português</option><option>Matemática</option><option>História</option>
+                  <option>Geografia</option><option>Ciências</option><option>Biologia</option>
+                  <option>Física</option><option>Química</option><option>Inglês</option>
+                  <option>Espanhol</option><option>Educação Física</option><option>Artes</option>
+                  <option>Filosofia</option><option>Sociologia</option><option>Outros</option>
+                </select>
+              </div>
+              <div>
+                <label>Série / Ano</label>
+                <select id="fm-serie">
+                  <option value="">Selecione...</option>
+                  <option>1º ano – Fundamental I</option><option>2º ano – Fundamental I</option>
+                  <option>3º ano – Fundamental I</option><option>4º ano – Fundamental I</option>
+                  <option>5º ano – Fundamental I</option><option>6º ano – Fundamental II</option>
+                  <option>7º ano – Fundamental II</option><option>8º ano – Fundamental II</option>
+                  <option>9º ano – Fundamental II</option><option>1º ano – Ensino Médio</option>
+                  <option>2º ano – Ensino Médio</option><option>3º ano – Ensino Médio</option>
+                  <option>EJA</option><option>Ensino Superior</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="g2" style="margin-bottom:12px">
+              <div>
+                <label>Tipo de Questões</label>
+                <select id="fm-tipo">
+                  <option value="mista">⊞ Mista</option>
+                  <option value="multipla">◉ Múltipla Escolha</option>
+                  <option value="vf">◈ Verdadeiro/Falso</option>
+                  <option value="discursiva">✍ Discursiva</option>
+                </select>
+              </div>
+              <div>
+                <label>Dificuldade</label>
+                <select id="fm-dif">
+                  <option value="facil">Fácil</option>
+                  <option value="medio" selected>Médio</option>
+                  <option value="dificil">Difícil</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label>Nº de questões: <strong id="fm-num-display" style="color:var(--gold)">10</strong></label>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+                <button class="btn-sec" style="padding:6px 14px;font-size:16px" onclick="changeFmNum(-1)">−</button>
+                <input type="range" id="fm-num-range" min="3" max="30" value="10"
+                  oninput="document.getElementById('fm-num-display').textContent=this.value"
+                  style="flex:1;accent-color:var(--gold)">
+                <button class="btn-sec" style="padding:6px 14px;font-size:16px" onclick="changeFmNum(1)">+</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Imagens selecionadas do manual -->
+          <div class="card" id="fm-images-card" style="margin-bottom:16px;display:none">
+            <div class="card-title">🖼️ Incluir imagens do manual</div>
+            <div id="fm-sel-images" class="img-grid"></div>
+          </div>
+
+          <!-- Botão gerar -->
+          <button class="btn-gold" style="width:100%;padding:18px;font-size:15px" onclick="gerarDoMaterial()">
+            ✦ Gerar Prova do Manual
+          </button>
+          <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:8px">
+            A IA usará o conteúdo exato do seu manual para criar as questões
+          </div>
+        </div>
+      </div>
+    </div>
+  </div><!-- /view-from-material -->
 
 </div><!-- /main -->
 
@@ -967,7 +1241,7 @@ function onLoggedIn(session) {
   if (state.currentView === 'auth') {
     goTo('form');
     // Small delay so DOM is visible before loading values
-    setTimeout(() => { loadCabecalhoLocal(); updateHdrPreview(); loadMaterialLocal(); }, 50);
+    setTimeout(() => { loadCabecalhoLocal(); updateHdrPreview(); loadMaterialLocal(); loadTemplateLocal(); }, 50);
   }
 }
 
@@ -1059,16 +1333,18 @@ function translateAuthError(msg) {
 // ── NAVIGATION ─────────────────────────────────────────────
 function goTo(view) {
   if (!currentSession && view !== 'auth') { showView('auth'); return; }
-  if (view === 'history')  loadHistory();
-  if (view === 'material') updateMatAiStatus();
+  if (view === 'history')       loadHistory();
+  if (view === 'material')    { updateMatAiStatus(); setTimeout(initChartCreator, 100); }
+  if (view === 'from-material') renderFmTopics();
   showView(view);
-  document.getElementById('nav-btn-form').classList.toggle('active',     view === 'form');
-  document.getElementById('nav-btn-material').classList.toggle('active', view === 'material');
-  document.getElementById('nav-btn-history').classList.toggle('active',  view === 'history');
+  document.getElementById('nav-btn-form').classList.toggle('active',          view === 'form');
+  document.getElementById('nav-btn-material').classList.toggle('active',      view === 'material');
+  document.getElementById('nav-btn-from-material').classList.toggle('active', view === 'from-material');
+  document.getElementById('nav-btn-history').classList.toggle('active',       view === 'history');
 }
 
 function showView(name) {
-  ['auth','form','loading','result','history','material'].forEach(v => {
+  ['auth','form','loading','result','history','material','from-material'].forEach(v => {
     const el = document.getElementById('view-' + v);
     if (el) el.style.display = v === name ? '' : 'none';
   });
@@ -1381,8 +1657,9 @@ function buildPrompt() {
     ? `\n\n═══ MATERIAL CURRICULAR DA ESCOLA (use como BASE dos temas e conteúdos) ═══\n${manualEntry.text.slice(0, MAX_CTX_CHARS)}\n[fim do material]`
     : '';
 
-  const styleCtx = prevExams.length > 0
-    ? `\n\n═══ ESTILO DE PROVAS DO PROFESSOR (REPLIQUE EXATAMENTE este padrão de formato, linguagem, nível de exigência e estrutura das questões) ═══\n${prevExams.map((e, i) => `--- Prova ${i + 1}: ${e.name} ---\n${e.text.slice(0, MAX_CTX_CHARS)}`).join('\n\n')}\n[fim dos exemplos]`
+  const tplEntry  = JSON.parse(localStorage.getItem(TPL_KEY) || 'null');
+  const styleCtx  = (prevExams.length > 0 || tplEntry)
+    ? `\n\n═══ ESTILO/TEMPLATE DO PROFESSOR (REPLIQUE EXATAMENTE este padrão de formato, linguagem e estrutura) ═══\n${tplEntry ? `--- Template principal: ${tplEntry.name} ---\n${tplEntry.text.slice(0, MAX_CTX_CHARS)}\n` : ''}${prevExams.map((e, i) => `--- Prova ${i + 1}: ${e.name} ---\n${e.text.slice(0, MAX_CTX_CHARS)}`).join('\n\n')}\n[fim dos exemplos]`
     : '';
 
   const hasContext = manualCtx || styleCtx;
@@ -1701,6 +1978,466 @@ function showToast(msg, type = 'error', duration = 4000) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// TEMPLATE DE FORMATO (botão no form Nova Prova)
+// ══════════════════════════════════════════════════════════════
+const TPL_KEY = 'provasIA-formatTemplate-v1';
+
+async function loadTemplateFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+  const kind = getFileKind(file);
+  if (!kind) { showToast('Envie .docx ou .pdf', 'error'); return; }
+  showToast('Processando template...', 'ok', 2500);
+  try {
+    const text = await extractFileText(file);
+    if (!text || text.length < 50) throw new Error('Texto não extraído');
+    const entry = { name: file.name, size: file.size, kind, text };
+    localStorage.setItem(TPL_KEY, JSON.stringify(entry));
+    renderTemplateBar(entry);
+    showToast('Template carregado! As próximas provas seguirão este padrão.', 'ok', 4000);
+  } catch (e) {
+    showToast('Erro: ' + e.message, 'error', 5000);
+  }
+}
+
+function renderTemplateBar(entry) {
+  if (!entry) {
+    document.getElementById('tpl-empty').style.display  = '';
+    document.getElementById('tpl-loaded').style.display = 'none';
+    return;
+  }
+  document.getElementById('tpl-empty').style.display    = 'none';
+  document.getElementById('tpl-loaded').style.display   = '';
+  document.getElementById('tpl-icon').textContent       = entry.kind === 'docx' ? '📝' : '📄';
+  document.getElementById('tpl-name').textContent       = entry.name;
+  document.getElementById('tpl-sub').textContent        =
+    `${formatBytes(entry.size)} · ${entry.text.length.toLocaleString('pt-BR')} chars extraídos`;
+}
+
+function clearTemplate() {
+  localStorage.removeItem(TPL_KEY);
+  renderTemplateBar(null);
+  showToast('Template removido.', 'ok');
+}
+
+function loadTemplateLocal() {
+  const t = JSON.parse(localStorage.getItem(TPL_KEY) || 'null');
+  renderTemplateBar(t);
+}
+
+// ══════════════════════════════════════════════════════════════
+// EXTRAÇÃO DE IMAGENS DO MANUAL
+// ══════════════════════════════════════════════════════════════
+let matImages = []; // array de { src: dataUrl, name: string, selected: bool }
+
+async function extractManualImages() {
+  const entry = JSON.parse(localStorage.getItem(MAT_MANUAL_KEY) || 'null');
+  if (!entry) return;
+
+  document.getElementById('mat-images-empty').style.display      = 'none';
+  document.getElementById('mat-images-grid').style.display       = 'none';
+  document.getElementById('mat-images-extracting').style.display = '';
+
+  matImages = [];
+  try {
+    // Para DOCX: extrair imagens da pasta word/media/
+    if (entry.kind === 'docx' && state._manualFileRef) {
+      const ab  = await state._manualFileRef.arrayBuffer();
+      const zip = await JSZip.loadAsync(ab);
+      const imgExts = /\.(png|jpe?g|gif|webp|bmp)$/i;
+      const mediaFiles = Object.keys(zip.files).filter(n => imgExts.test(n));
+      for (const fname of mediaFiles.slice(0, 20)) {
+        const blob    = await zip.file(fname).async('blob');
+        const dataUrl = await blobToDataUrl(blob);
+        matImages.push({ src: dataUrl, name: fname.split('/').pop(), selected: false });
+      }
+    }
+    // Para PDF: renderizar páginas como preview
+    if (entry.kind === 'pdf' && state._manualFileRef) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      const ab  = await state._manualFileRef.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+      const maxPg = Math.min(pdf.numPages, 10);
+      for (let i = 1; i <= maxPg; i++) {
+        const page   = await pdf.getPage(i);
+        const vp     = page.getViewport({ scale: 0.6 });
+        const canvas = document.createElement('canvas');
+        canvas.width  = vp.width;
+        canvas.height = vp.height;
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        matImages.push({ src: canvas.toDataURL(), name: `Página ${i}`, selected: false });
+      }
+    }
+  } catch (e) { console.warn('Erro ao extrair imagens:', e); }
+
+  document.getElementById('mat-images-extracting').style.display = 'none';
+  renderImageGrid();
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((res, rej) => {
+    const reader = new FileReader();
+    reader.onload  = () => res(reader.result);
+    reader.onerror = rej;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function renderImageGrid() {
+  const grid  = document.getElementById('mat-images-grid');
+  const empty = document.getElementById('mat-images-empty');
+  if (matImages.length === 0) {
+    empty.textContent    = 'Nenhuma imagem encontrada no arquivo';
+    empty.style.display  = '';
+    grid.style.display   = 'none';
+    return;
+  }
+  grid.style.display  = '';
+  empty.style.display = 'none';
+  grid.innerHTML = matImages.map((img, i) => `
+    <div class="img-thumb ${img.selected ? 'selected' : ''}" onclick="toggleImage(${i})" title="${img.name}">
+      <img src="${img.src}" alt="${img.name}" loading="lazy">
+      <div class="img-sel">✓</div>
+    </div>
+  `).join('');
+  // Sync fm-images-card
+  syncFmImages();
+}
+
+function toggleImage(i) {
+  matImages[i].selected = !matImages[i].selected;
+  renderImageGrid();
+}
+
+function syncFmImages() {
+  const sel   = matImages.filter(img => img.selected);
+  const card  = document.getElementById('fm-images-card');
+  const grid  = document.getElementById('fm-sel-images');
+  card.style.display = sel.length > 0 ? '' : 'none';
+  grid.innerHTML = sel.map((img, i) => `
+    <div class="img-thumb selected">
+      <img src="${img.src}" alt="${img.name}" loading="lazy">
+      <div class="img-sel">✓</div>
+    </div>
+  `).join('');
+}
+
+// ══════════════════════════════════════════════════════════════
+// CRIADOR DE GRÁFICOS
+// ══════════════════════════════════════════════════════════════
+let chartInstance = null;
+const CHART_COLORS = ['#d4a843','#2e6a5e','#7ecfbd','#e07070','#7b9fe8','#c47fd4','#80c870','#f0a060'];
+
+function initChartCreator() {
+  // Inicia com 4 linhas de exemplo
+  const rows = document.getElementById('chart-rows');
+  if (rows.children.length === 0) {
+    [['Jan', 42], ['Fev', 58], ['Mar', 35], ['Abr', 71]].forEach(([l, v]) => addChartRow(l, v));
+    renderChartPreview();
+  }
+}
+
+function addChartRow(label = '', value = '') {
+  const rows = document.getElementById('chart-rows');
+  const row  = document.createElement('div');
+  row.className = 'chart-data-row';
+  row.innerHTML = `
+    <input type="text"   placeholder="Rótulo" value="${label}"
+      oninput="renderChartPreview()" style="font-size:12px;padding:7px 10px;">
+    <input type="number" placeholder="Valor"  value="${value}" min="0"
+      oninput="renderChartPreview()" style="font-size:12px;padding:7px 10px;">
+    <button class="chart-del" onclick="this.parentElement.remove();renderChartPreview()">✕</button>
+  `;
+  rows.appendChild(row);
+}
+
+function getChartData() {
+  const rows   = document.querySelectorAll('#chart-rows .chart-data-row');
+  const labels = [], values = [];
+  rows.forEach(r => {
+    const [li, vi] = r.querySelectorAll('input');
+    if (li.value.trim()) { labels.push(li.value.trim()); values.push(parseFloat(vi.value) || 0); }
+  });
+  return { labels, values };
+}
+
+function renderChartPreview() {
+  if (!window.Chart) return;
+  const { labels, values } = getChartData();
+  if (!labels.length) return;
+
+  const canvas = document.getElementById('chart-preview-canvas');
+  const title  = document.getElementById('chart-title').value;
+  let   type   = document.getElementById('chart-type').value;
+  const isHBar = type === 'horizontalBar';
+  if (isHBar) type = 'bar';
+
+  if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+
+  chartInstance = new Chart(canvas, {
+    type,
+    data: {
+      labels,
+      datasets: [{
+        label: title || 'Dados',
+        data: values,
+        backgroundColor: CHART_COLORS.slice(0, labels.length),
+        borderColor:     CHART_COLORS.slice(0, labels.length),
+        borderWidth: type === 'line' ? 2 : 1,
+        fill: type === 'line',
+        tension: 0.4,
+      }],
+    },
+    options: {
+      indexAxis:   isHBar ? 'y' : 'x',
+      responsive:  true,
+      plugins: {
+        title:   { display: !!title, text: title, color: '#e8ddc8', font: { size: 13 } },
+        legend:  { display: ['pie','doughnut'].includes(type), labels: { color: '#b0a890' } },
+      },
+      scales: ['pie','doughnut'].includes(type) ? {} : {
+        x: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+      },
+    },
+    plugins: [{
+      id: 'bgFill',
+      beforeDraw(chart) {
+        const ctx = chart.canvas.getContext('2d');
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-over';
+        ctx.fillStyle = '#1e1e2e';
+        ctx.fillRect(0, 0, chart.width, chart.height);
+        ctx.restore();
+      },
+    }],
+  });
+}
+
+function downloadChart() {
+  const canvas = document.getElementById('chart-preview-canvas');
+  const a = document.createElement('a');
+  a.href     = canvas.toDataURL('image/png');
+  a.download = `grafico_${Date.now()}.png`;
+  a.click();
+}
+
+// ══════════════════════════════════════════════════════════════
+// DO MANUAL — extração de tópicos e geração de prova
+// ══════════════════════════════════════════════════════════════
+let fmTopics = []; // [{ text, level, selected }]
+
+function extractTopicsFromText(text) {
+  const lines  = text.split(/\n|(?<=\.)\s{2,}/).map(l => l.trim()).filter(Boolean);
+  const topics = [];
+  const seen   = new Set();
+
+  for (const line of lines) {
+    if (line.length < 4 || line.length > 120) continue;
+
+    // Detecta headings por padrão
+    const isNumbered = /^(\d+[\.\)]\s+|\d+\.\d+\s+)/.test(line);
+    const isAllCaps  = line === line.toUpperCase() && /[A-ZÁÉÍÓÚÀÂÊÔ]/.test(line) && line.length > 4;
+    const isShort    = line.length < 60 && !line.endsWith(',');
+    const hasKeyword = /^(capítulo|unidade|módulo|tema|seção|aula|parte|bloco|tópico)/i.test(line);
+
+    if (isNumbered || isAllCaps || hasKeyword || (isShort && /^[A-ZÁÉÍÓÚ]/.test(line) && !/[.!?]$/.test(line))) {
+      const key = line.toLowerCase().replace(/\s+/g, ' ');
+      if (!seen.has(key)) {
+        seen.add(key);
+        const level = isNumbered && /^\d+\.\d+/.test(line) ? 2 : 1;
+        topics.push({ text: line.replace(/^\d+[\.\)]\s+/, ''), level, selected: true });
+        if (topics.length >= 40) break;
+      }
+    }
+  }
+  return topics;
+}
+
+function renderFmTopics() {
+  const manual = JSON.parse(localStorage.getItem(MAT_MANUAL_KEY) || 'null');
+  const noManEl  = document.getElementById('fm-no-manual');
+  const contentEl = document.getElementById('fm-content');
+
+  if (!manual) {
+    noManEl.style.display  = '';
+    contentEl.style.display = 'none';
+    return;
+  }
+  noManEl.style.display   = 'none';
+  contentEl.style.display = '';
+
+  fmTopics = extractTopicsFromText(manual.text);
+
+  const list = document.getElementById('fm-topics-list');
+  if (fmTopics.length === 0) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:8px">Nenhum tópico identificado automaticamente. Use a aba Nova Prova e descreva o conteúdo manualmente.</div>';
+    return;
+  }
+
+  list.innerHTML = fmTopics.map((t, i) => `
+    <div class="fm-topic-item" onclick="toggleTopic(${i})">
+      <input type="checkbox" ${t.selected ? 'checked' : ''} onclick="event.stopPropagation();toggleTopic(${i})">
+      <span class="fm-topic-text" style="${t.level===2?'padding-left:14px;font-size:12px;color:var(--muted)':''}">
+        ${t.level === 1 ? '▸ ' : '◦ '}${t.text}
+      </span>
+    </div>
+  `).join('');
+  updateFmCount();
+}
+
+function toggleTopic(i) {
+  fmTopics[i].selected = !fmTopics[i].selected;
+  const cbs = document.querySelectorAll('#fm-topics-list input[type=checkbox]');
+  if (cbs[i]) cbs[i].checked = fmTopics[i].selected;
+  updateFmCount();
+}
+
+function selectAllTopics(val) {
+  fmTopics.forEach((t, i) => { t.selected = val; });
+  renderFmTopics();
+}
+
+function updateFmCount() {
+  const sel = fmTopics.filter(t => t.selected).length;
+  document.getElementById('fm-topics-count').textContent =
+    `${sel} tópico(s) selecionado(s) de ${fmTopics.length}`;
+}
+
+function changeFmNum(delta) {
+  const el = document.getElementById('fm-num-range');
+  el.value = Math.min(30, Math.max(3, parseInt(el.value) + delta));
+  document.getElementById('fm-num-display').textContent = el.value;
+}
+
+async function gerarDoMaterial() {
+  const manual = JSON.parse(localStorage.getItem(MAT_MANUAL_KEY) || 'null');
+  if (!manual) { showToast('Carregue o manual primeiro.', 'error'); return; }
+
+  const disc  = document.getElementById('fm-disc').value;
+  const serie = document.getElementById('fm-serie').value;
+  const tipo  = document.getElementById('fm-tipo').value;
+  const dif   = document.getElementById('fm-dif').value;
+  const numQ  = parseInt(document.getElementById('fm-num-range').value);
+  const selTopics = fmTopics.filter(t => t.selected).map(t => t.text);
+
+  if (!disc || !serie) { showToast('Selecione disciplina e série.', 'error'); return; }
+  if (selTopics.length === 0) { showToast('Selecione pelo menos um tópico.', 'error'); return; }
+
+  const tipoLabel = { mista:'Mista (múltipla escolha, V/F e discursiva)', multipla:'Apenas Múltipla Escolha', vf:'Apenas Verdadeiro ou Falso', discursiva:'Apenas discursivas/abertas' }[tipo];
+  const difLabel  = { facil:'Fácil', medio:'Médio', dificil:'Difícil' }[dif];
+
+  const topicsBlock = selTopics.map((t, i) => `${i+1}. ${t}`).join('\n');
+  const manualExcerpt = manual.text.slice(0, 5000);
+
+  const prompt = `Você é um professor especialista em ${disc || 'Disciplina escolar'}.
+Crie uma prova escolar EXCLUSIVAMENTE baseada no material curricular abaixo.
+
+ESPECIFICAÇÕES:
+- Disciplina: ${disc}
+- Série/Ano: ${serie}
+- Tipo de questões: ${tipoLabel}
+- Dificuldade: ${difLabel}
+- Número de questões: ${numQ}
+
+TÓPICOS SELECIONADOS DO MATERIAL (distribua as questões entre estes tópicos):
+${topicsBlock}
+
+═══ MATERIAL CURRICULAR DA ESCOLA (BASE EXCLUSIVA DAS QUESTÕES) ═══
+${manualExcerpt}
+[fim do material]
+
+IMPORTANTE: Use SOMENTE o conteúdo e vocabulário do material acima. Não invente conteúdo externo.
+
+FORMATO OBRIGATÓRIO DA SAÍDA:
+1. Liste as questões numeradas: "1. enunciado da questão"
+2. Para múltipla escolha, alternativas em linhas separadas: "A)", "B)", "C)", "D)", "E)"
+3. Para V/F: "( ) Verdadeiro  ( ) Falso" após o enunciado
+4. Para discursivas: "Resposta: ___"
+5. NÃO inclua cabeçalho
+6. Após todas as questões, escreva exatamente: ---GABARITO---
+7. Depois liste o gabarito comentado de cada questão`;
+
+  // Sincroniza estado para que o resultado apareça corretamente
+  state.tipo = tipo;
+  state.dif  = dif;
+  state.numQ = numQ;
+
+  document.getElementById('loading-desc').innerHTML =
+    `Gerando <strong style="color:var(--gold)">${numQ} questões</strong> de ${disc} baseadas no material da escola.`;
+  const preview = document.getElementById('stream-preview');
+  preview.innerHTML = '<span class="stream-cursor"></span>';
+  ['tk-chars','tk-words','tk-q'].forEach(id => document.getElementById(id).textContent = '0');
+  showView('loading');
+  document.getElementById('badge-saved').style.display = 'none';
+
+  const token = await getToken();
+  if (!token) { showView('auth'); return; }
+
+  let accumulated = '';
+  try {
+    const res = await fetch('/api/gerar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ prompt }),
+    });
+    if (!res.ok) { showToast('Erro ao gerar: ' + res.statusText, 'error'); showView('from-material'); return; }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let   buffer  = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n'); buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        if (raw === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed.error) throw new Error(parsed.error);
+          if (parsed.text) {
+            accumulated += parsed.text;
+            const cursor = preview.querySelector('.stream-cursor');
+            if (cursor) cursor.insertAdjacentText('beforebegin', parsed.text);
+            else preview.insertAdjacentText('beforeend', parsed.text);
+            updateStats(accumulated);
+          }
+        } catch {}
+      }
+    }
+
+    const sep  = accumulated.indexOf('---GABARITO---');
+    state.provaText = sep !== -1 ? accumulated.slice(0, sep).trim() : accumulated.trim();
+    state.gabText   = sep !== -1 ? accumulated.slice(sep + 14).trim() : '';
+
+    document.getElementById('prova-text').value = state.provaText;
+    document.getElementById('gab-text').value   = state.gabText;
+
+    // Preenche campos de contexto para exportação
+    const discEl = document.getElementById('f-disc');
+    if (discEl && disc) {
+      [...discEl.options].forEach(o => { if (o.value === disc || o.text === disc) discEl.value = o.value; });
+    }
+    const serieEl = document.getElementById('f-serie');
+    if (serieEl && serie) {
+      [...serieEl.options].forEach(o => { if (o.text === serie) serieEl.value = o.value; });
+    }
+
+    showView('result');
+    document.getElementById('badge-saved').style.display = 'none';
+    switchTab('prova');
+  } catch (e) {
+    showToast('Erro: ' + e.message, 'error', 6000);
+    showView('from-material');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
 // MATERIAL DO PROFESSOR — localStorage keys
 // ══════════════════════════════════════════════════════════════
 const MAT_MANUAL_KEY   = 'provasIA-teacherManual-v1';
@@ -1772,8 +2509,11 @@ async function processManualFile(file) {
 
     const entry = { name: file.name, size: file.size, kind, text };
     localStorage.setItem(MAT_MANUAL_KEY, JSON.stringify(entry));
+    state._manualFileRef = file; // mantém o File para extração de imagens
     renderManualLoaded(entry);
     updateMatAiStatus();
+    // Extrai imagens em background
+    extractManualImages();
     showToast('Manual carregado! A IA usará como referência.', 'ok', 4000);
   } catch (e) {
     document.getElementById('manual-drop-empty').style.display = '';
