@@ -10,11 +10,11 @@ const __dirname  = path.dirname(__filename);
 
 // ── Validate env ──────────────────────────────────────────────────────────────
 const REQUIRED = ['SUPABASE_URL', 'SUPABASE_PUBLISHABLE_KEY', 'OPENROUTER_API_KEY'];
-for (const k of REQUIRED) {
-  if (!process.env[k]) {
-    console.error(`\n❌  ${k} não encontrada no .env\n`);
-    process.exit(1);
-  }
+const missingEnv = REQUIRED.filter(k => !process.env[k]);
+if (missingEnv.length > 0) {
+  console.error(`\n❌  Variáveis de ambiente ausentes: ${missingEnv.join(', ')}\n`);
+  // Localmente encerra o processo; no Vercel apenas loga (process.exit quebraria a função)
+  if (!process.env.VERCEL) process.exit(1);
 }
 
 const SUPABASE_URL  = process.env.SUPABASE_URL;
@@ -84,7 +84,9 @@ app.post('/api/gerar', auth, async (req, res) => {
       headers: {
         Authorization:  `Bearer ${OR_KEY}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': `http://localhost:${PORT}`,
+        'HTTP-Referer': process.env.VERCEL_URL
+          ? `https://${process.env.VERCEL_URL}`
+          : `http://localhost:${PORT}`,
         'X-Title':      'Gerador de Provas com IA',
       },
       body: JSON.stringify({
@@ -195,8 +197,13 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`\n✅  Gerador de Provas rodando em http://localhost:${PORT}\n`);
-  console.log(`   Modelo: ${OR_MODEL} via OpenRouter`);
-  console.log(`   Banco:  ${SUPABASE_URL}\n`);
-});
+// Localmente inicia o servidor normalmente; no Vercel exporta o app como handler
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`\n✅  Gerador de Provas rodando em http://localhost:${PORT}\n`);
+    console.log(`   Modelo: ${OR_MODEL} via OpenRouter`);
+    console.log(`   Banco:  ${SUPABASE_URL}\n`);
+  });
+}
+
+export default app;
