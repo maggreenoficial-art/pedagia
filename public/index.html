@@ -1017,50 +1017,72 @@ async function handleBookFile(input) {
   }
 }
 
+// ── Extrai texto de uma faixa de páginas do PDF ──────────────────────
+async function extractPagesRaw(pdf, fromPage, toPage) {
+  let text = '';
+  for (let p = fromPage; p <= Math.min(toPage, pdf.numPages); p++) {
+    const page = await pdf.getPage(p);
+    const ct   = await page.getTextContent();
+    let pt = ''; let lx = null;
+    for (const item of ct.items) {
+      if (lx !== null && Math.abs(item.transform[4] - lx) > 8) pt += ' ';
+      pt += item.str; lx = item.transform[4] + (item.width||0);
+    }
+    text += pt + '\n';
+  }
+  return text;
+}
+
+// ── Chama /api/sumario — IA interpreta o texto e retorna capítulos ────
+async function callSumarioIA(rawText) {
+  const token = currentSession?.access_token;
+  if (!token) throw new Error('Não autenticado.');
+  const r = await fetch('/api/sumario', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ text: rawText }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || 'Erro ao consultar IA.');
+  return data.chapters || [];
+}
+
 async function lerSum() {
   const pageNum = parseInt(document.getElementById('pg').value);
   if (!pageNum || !st.bookPdf) { toast('Insira o número da página do sumário.', 'err'); return; }
 
-  const btn = document.getElementById('btn-ler');
-  btn.disabled = true; btn.textContent = 'Lendo...';
+  const btn    = document.getElementById('btn-ler');
   const status = document.getElementById('sum-status');
-  status.style.display = ''; status.textContent = 'Lendo o sumário...';
+  btn.disabled = true; btn.textContent = '⏳ IA lendo...';
+  status.style.display = ''; status.textContent = '🤖 Enviando sumário para a IA...';
 
   try {
-    // Read 3 pages starting from the sumário page (handles multi-page indices)
-    let sumText = '';
-    const lastPg = Math.min(pageNum + 2, st.bookTotalPages);
-    for (let p = pageNum; p <= lastPg; p++) {
-      const page = await st.bookPdf.getPage(p);
-      const ct = await page.getTextContent();
-      let pt = ''; let lx = null;
-      for (const item of ct.items) {
-        if (lx !== null && Math.abs(item.transform[4] - lx) > 8) pt += ' ';
-        pt += item.str; lx = item.transform[4] + (item.width||0);
-      }
-      sumText += pt + '\n';
-    }
+    // Extrai 3 páginas a partir da página informada (cobre sumários de 2-3 páginas)
+    const sumText = await extractPagesRaw(st.bookPdf, pageNum, pageNum + 2);
 
-    const chapters = parseSumarioText(sumText);
+    status.textContent = '🔍 IA identificando capítulos...';
+    const chapters = await callSumarioIA(sumText);
     st.bookChapters = chapters;
 
     if (!chapters.length) {
-      status.textContent = 'Sumário não detectado automaticamente — use o campo manual abaixo.';
+      status.textContent = '⚠️ IA não encontrou capítulos. Verifique a página do sumário ou use o campo manual.';
+      toast('Nenhum capítulo encontrado — tente outra página.', 'err');
     } else {
-      status.textContent = `${chapters.length} capítulo(s) detectado(s)`;
+      status.textContent = `✅ ${chapters.length} capítulo(s) identificado(s) pela IA`;
+      toast(`${chapters.length} capítulos encontrados!`, 'ok');
     }
 
     renderChapterList(chapters, 'chapter-list', selectChapter);
     document.getElementById('step3-item').style.display = 'flex';
 
-    // Progress
+    // Progresso
     document.getElementById('pp2').className = 'pstep done';
     document.getElementById('pp2').querySelector('.pdot').textContent = '✓';
     document.getElementById('pp3').className = 'pstep act';
 
     setTimeout(() => document.getElementById('step3-item').scrollIntoView({behavior:'smooth',block:'nearest'}), 100);
   } catch(e) {
-    status.textContent = 'Erro ao ler: ' + e.message;
+    status.textContent = '❌ Erro: ' + e.message;
     toast(e.message, 'err');
   } finally {
     btn.disabled = false; btn.textContent = 'Ler sumário →';
@@ -1903,19 +1925,25 @@ async function handleCIBook(input) {
 }
 
 async function ciLerSum() {
-  const pg=parseInt(document.getElementById('ci-pg').value);
-  if(!pg||!st.ciBookPdf){toast('Informe o número da página.','err');return;}
-  let txt='';
-  for(let p=pg;p<=Math.min(pg+2,st.ciBookPdf.numPages);p++){
-    const page=await st.ciBookPdf.getPage(p);
-    const ct=await page.getTextContent();
-    txt+=ct.items.map(i=>i.str).join(' ')+'\n';
+  const pg = parseInt(document.getElementById('ci-pg').value);
+  if (!pg || !st.ciBookPdf) { toast('Informe o número da página do sumário.', 'err'); return; }
+
+  const btn = document.querySelector('#ci-s2 .btn-ir');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ IA lendo...'; }
+  toast('🤖 IA identificando capítulos...', 'ok', 8000);
+
+  try {
+    const txt = await extractPagesRaw(st.ciBookPdf, pg, pg + 2);
+    const chs = await callSumarioIA(txt);
+    st.ciBookChapters = chs;
+    renderChapterList(chs, 'ci-chap-list', selectCIChapter);
+    document.getElementById('ci-chaps').style.display = '';
+    toast(`${chs.length} capítulo(s) identificado(s)!`, chs.length ? 'ok' : 'err');
+  } catch(e) {
+    toast('Erro: ' + e.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Ler sumário →'; }
   }
-  const chs=parseSumarioText(txt);
-  st.ciBookChapters=chs;
-  renderChapterList(chs,'ci-chap-list',selectCIChapter);
-  document.getElementById('ci-chaps').style.display='';
-  toast(`${chs.length} capítulo(s) detectado(s)`, chs.length?'ok':'err');
 }
 
 function selectCIChapter(el, idx) {

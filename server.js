@@ -66,6 +66,75 @@ app.get('/api/status', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
+// ── POST /api/sumario — IA lê sumário e retorna lista de capítulos (JSON) ─────
+app.post('/api/sumario', auth, async (req, res) => {
+  const { text } = req.body;
+  if (!text || text.trim().length < 10) {
+    return res.status(400).json({ error: 'Texto do sumário muito curto.' });
+  }
+
+  const prompt = `Você é um assistente especialista em análise de livros e apostilas didáticos brasileiros.
+
+Analise o texto abaixo, extraído de páginas de sumário/índice de um livro ou apostila.
+Identifique TODOS os capítulos, unidades, módulos, temas ou seções principais, com seus números de página.
+
+RETORNE APENAS um array JSON válido, sem texto antes ou depois, no formato:
+[
+  {"title": "Nome completo do capítulo/unidade", "pageNum": 12},
+  {"title": "Outro capítulo", "pageNum": 34}
+]
+
+REGRAS:
+- Inclua apenas capítulos/unidades/módulos principais (não subseções)
+- Se não houver número de página, use null
+- Não inclua: prefácio, apresentação, introdução geral, bibliografia, anexos, glossário, créditos
+- Mantenha os títulos exatamente como aparecem no sumário
+- Se o texto não for um sumário, retorne []
+
+TEXTO DO SUMÁRIO:
+${text.slice(0, 5000)}`;
+
+  try {
+    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization:  `Bearer ${OR_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': process.env.VERCEL_URL
+          ? `https://${process.env.VERCEL_URL}`
+          : `http://localhost:${PORT}`,
+        'X-Title': 'Gerador de Provas com IA',
+      },
+      body: JSON.stringify({
+        model:      OR_MODEL,
+        stream:     false,
+        max_tokens: 1024,
+        messages:   [{ role: 'user', content: prompt }],
+      }),
+    });
+
+    if (!resp.ok) {
+      const t = await resp.text();
+      return res.status(502).json({ error: `OpenRouter: ${t}` });
+    }
+
+    const data    = await resp.json();
+    const content = data.choices?.[0]?.message?.content?.trim() || '';
+
+    // Extrai o array JSON da resposta (IA pode adicionar markdown code fences)
+    const match = content.match(/\[[\s\S]*\]/);
+    if (!match) {
+      return res.status(422).json({ error: 'IA não retornou JSON válido.', raw: content });
+    }
+
+    const chapters = JSON.parse(match[0]);
+    return res.json({ chapters });
+  } catch (err) {
+    console.error('Erro /api/sumario:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /api/gerar — OpenRouter streaming via SSE (suporta multimodal) ──────
 app.post('/api/gerar', auth, async (req, res) => {
   const { prompt, images } = req.body;
