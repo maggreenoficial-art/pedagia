@@ -735,7 +735,7 @@ textarea{resize:vertical;min-height:80px;line-height:1.55}
 // ══════════════════════════════════════════════
 // STATE
 // ══════════════════════════════════════════════
-let supabase, currentSession;
+let _sb, currentSession;
 const st = {
   numQ: 10, dif: 'medio',
   // School template
@@ -769,10 +769,10 @@ async function init() {
 
   try {
     const cfg = await fetch('/api/config').then(r => r.json());
-    supabase = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey);
-    const { data: { session } } = await supabase.auth.getSession();
+    _sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey);
+    const { data: { session } } = await _sb.auth.getSession();
     if (session) onLogin(session); else showView('auth');
-    supabase.auth.onAuthStateChange((ev, s) => { if(s) onLogin(s); else onLogout(); });
+    _sb.auth.onAuthStateChange((ev, s) => { if(s) onLogin(s); else onLogout(); });
   } catch(e) { showView('auth'); }
 
   loadCab();
@@ -816,9 +816,9 @@ async function doAuth() {
   try {
     let result;
     if (authMode === 'login') {
-      result = await supabase.auth.signInWithPassword({ email, password: pass });
+      result = await _sb.auth.signInWithPassword({ email, password: pass });
     } else {
-      result = await supabase.auth.signUp({ email, password: pass });
+      result = await _sb.auth.signUp({ email, password: pass });
     }
     if (result.error) throw result.error;
     if (authMode === 'register' && !result.data?.session) {
@@ -834,7 +834,7 @@ async function doAuth() {
   }
 }
 async function doLogout() {
-  await supabase?.auth.signOut();
+  await _sb?.auth.signOut();
 }
 
 // ══════════════════════════════════════════════
