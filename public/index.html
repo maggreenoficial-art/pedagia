@@ -138,6 +138,25 @@ textarea{resize:vertical;min-height:80px;line-height:1.55}
 .pc.on{border-color:var(--Y);background:var(--Ya);color:var(--Y)}
 .pg-info{margin-top:8px;font-size:11px;color:var(--t3);font-weight:600}
 
+/* ── IMAGE GALLERY ── */
+.img-sec-lbl{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:var(--Y);margin-bottom:10px;display:flex;align-items:center;gap:10px}
+.img-sec-lbl span{font-size:11px;font-weight:600;color:var(--t3);text-transform:none;letter-spacing:0}
+.img-gallery{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.img-thumb{border-radius:var(--rsm);border:2.5px solid var(--line);overflow:hidden;cursor:pointer;transition:all .18s;position:relative;background:var(--s3)}
+.img-thumb.on{border-color:var(--Y);box-shadow:0 0 0 1px rgba(255,210,0,.3)}
+.img-thumb img{width:100%;display:block;min-height:90px;object-fit:cover}
+.img-thumb-foot{background:rgba(0,0,0,.72);padding:5px 8px;display:flex;justify-content:space-between;align-items:center}
+.img-thumb-pg{font-size:12px;font-weight:900;color:var(--Y)}
+.img-thumb-chk{font-size:13px;transition:all .18s}
+.img-thumb.on .img-thumb-chk::before{content:'✓';color:var(--G)}
+.img-thumb:not(.on) .img-thumb-chk::before{content:'○';color:var(--t3)}
+.img-spin{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--s3);font-size:22px}
+@keyframes pulsate{0%,100%{opacity:1}50%{opacity:.4}}
+.img-spin span{animation:pulsate 1s ease infinite}
+.img-sel-info{margin-top:8px;font-size:11px;font-weight:700;padding:8px 10px;border-radius:var(--rxs)}
+.img-sel-info.has{background:var(--Ga);color:#3DD86A;border:1px solid rgba(24,160,60,.2)}
+.img-sel-info.none{background:var(--s2);color:var(--t3);border:1px solid var(--line)}
+
 /* ── DIF CHIPS ── */
 .chips{display:flex;gap:7px;flex-wrap:wrap}
 .chip{padding:9px 16px;border-radius:100px;font-size:13px;font-weight:700;border:1.5px solid var(--line);background:var(--s2);color:var(--t3);cursor:pointer;transition:all .15s;font-family:var(--f);user-select:none}
@@ -498,6 +517,18 @@ textarea{resize:vertical;min-height:80px;line-height:1.55}
             <div class="sdesc">Marque as páginas. O sistema extrai texto, imagens e fontes de cada uma.</div>
             <div class="pchips" id="page-chips" style="margin-top:8px"></div>
             <div class="pg-info" id="pg-count">0 páginas selecionadas</div>
+
+            <!-- Galeria de imagens das páginas -->
+            <div id="img-section" style="display:none;margin-top:18px">
+              <div class="img-sec-lbl">
+                🖼 Imagens para as questões
+                <span id="img-status">Carregando visualizações...</span>
+              </div>
+              <div id="img-gallery" class="img-gallery"></div>
+              <div id="img-sel-info" class="img-sel-info none" style="margin-top:8px">
+                Nenhuma imagem selecionada
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -743,6 +774,11 @@ const st = {
   // Book PDF (page-based navigation)
   bookFile: null, bookPdf: null, bookFileName: '', bookTotalPages: 0,
   bookChapters: [], selectedChapterIdx: -1, selectedPages: new Set(),
+  // Page image gallery
+  pageThumbnails: {},    // pageNum → dataURL (thumbnail para exibição)
+  pageImageHires: {},    // pageNum → base64 JPEG 800px (para a IA)
+  selectedImgPages: new Set(), // páginas cujas imagens vão para a IA
+  imgRendering: false,
   // Generation result
   provaText: '', gabText: '',
   // Criador Inteligente
@@ -1132,12 +1168,18 @@ function selectChapter(el, idx) {
   document.querySelectorAll('#chapter-list .citem').forEach(c => c.classList.remove('on'));
   el.classList.add('on');
   st.selectedChapterIdx = idx;
-  st.selectedPages = new Set();
+  st.selectedPages      = new Set();
+  // Reseta galeria
+  st.pageThumbnails  = {};
+  st.pageImageHires  = {};
+  st.selectedImgPages = new Set();
+  st.imgRendering    = false;
+  document.getElementById('img-section').style.display = 'none';
+  document.getElementById('img-gallery').innerHTML = '';
 
   const ch   = st.bookChapters[idx];
   const next = st.bookChapters[idx + 1];
 
-  // Generate page range
   if (ch.pageNum) {
     const start = ch.pageNum;
     const end   = next?.pageNum ? next.pageNum - 1 : Math.min(start + 24, st.bookTotalPages);
@@ -1147,6 +1189,8 @@ function selectChapter(el, idx) {
       st.selectedPages.add(p);
     }
     renderPageChips(pages);
+    // Inicia renderização da galeria em background
+    renderPageThumbnails(pages);
   }
 
   document.getElementById('step4-item').style.display = 'flex';
@@ -1166,12 +1210,23 @@ function renderPageChips(pages) {
 function togP(el) {
   const p = parseInt(el.dataset.pg);
   el.classList.toggle('on');
-  el.classList.contains('on') ? st.selectedPages.add(p) : st.selectedPages.delete(p);
+  const on = el.classList.contains('on');
+  on ? st.selectedPages.add(p) : st.selectedPages.delete(p);
+  // Sincroniza galeria: remover da seleção de imagens se a página foi desmarcada
+  if (!on) {
+    st.selectedImgPages.delete(p);
+    const imgEl = document.getElementById(`imgt-${p}`);
+    if (imgEl) imgEl.classList.remove('on');
+    updateImgSelInfo();
+  }
   updatePgCount();
 }
 function updatePgCount() {
   const n = st.selectedPages.size;
-  document.getElementById('pg-count').textContent = n + ' página' + (n!==1?'s':'') + ' selecionada' + (n!==1?'s':'') + ' · texto + imagens + fontes';
+  const ni = st.selectedImgPages.size;
+  const imgInfo = ni > 0 ? ` · ${ni} imagem${ni!==1?'ns':''}` : '';
+  document.getElementById('pg-count').textContent =
+    n + ' página' + (n!==1?'s':'') + ' selecionada' + (n!==1?'s':'') + imgInfo + ' · texto + fontes';
 }
 function onManualCap() {
   st.selectedChapterIdx = -1;
@@ -1201,29 +1256,119 @@ async function extractSelectedPages() {
 // ══════════════════════════════════════════════
 // BUILD PROMPT
 // ══════════════════════════════════════════════
-// ── Extrai imagens (renderiza páginas selecionadas) ──────────────────
-async function extractPageImages() {
-  if (!st.bookPdf || st.selectedPages.size === 0) return [];
-  const images = [];
-  // Usa no máximo 4 páginas como imagem (limite multimodal)
-  const pages = [...st.selectedPages].sort((a,b) => a-b).slice(0, 4);
+// ── Galeria de imagens das páginas ──────────────────────────────────
+async function renderPageThumbnails(pages) {
+  if (!st.bookPdf || pages.length === 0) return;
+  if (st.imgRendering) return; // evita renderização dupla
+
+  st.imgRendering = true;
+  st.pageThumbnails  = {};
+  st.pageImageHires  = {};
+  st.selectedImgPages = new Set(pages); // default: todas selecionadas
+
+  const gallery = document.getElementById('img-gallery');
+  const imgSec  = document.getElementById('img-section');
+  const status  = document.getElementById('img-status');
+
+  // Mostra seção e cria placeholders
+  imgSec.style.display = '';
+  gallery.innerHTML = pages.map(p => `
+    <div class="img-thumb on" id="imgt-${p}" data-pg="${p}" onclick="togImgPage(this)">
+      <div class="img-spin"><span>⏳</span></div>
+      <div class="img-thumb-foot">
+        <span class="img-thumb-pg">p.${p}</span>
+        <span class="img-thumb-chk"></span>
+      </div>
+    </div>`).join('');
+
+  updateImgSelInfo();
+  status.textContent = `Renderizando 0/${pages.length}...`;
+
+  let done = 0;
   for (const pageNum of pages) {
     try {
       const page = await st.bookPdf.getPage(pageNum);
-      const vp   = page.getViewport({ scale: 1.2 });
-      const canvas = document.createElement('canvas');
-      canvas.width  = vp.width;
-      canvas.height = vp.height;
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-      // Redimensiona para no máximo 900px de largura
-      const maxW  = 900;
-      const scale = Math.min(maxW / vp.width, 1);
-      const out   = document.createElement('canvas');
-      out.width   = Math.round(vp.width  * scale);
-      out.height  = Math.round(vp.height * scale);
-      out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
-      const b64 = out.toDataURL('image/jpeg', 0.72).split(',')[1];
-      images.push({ mimeType: 'image/jpeg', data: b64 });
+      const baseVp = page.getViewport({ scale: 1.0 });
+
+      // High-res para a IA (máx 850px largura)
+      const hiScale = Math.min(850 / baseVp.width, 1.4);
+      const hiVp    = page.getViewport({ scale: hiScale });
+      const hiC     = document.createElement('canvas');
+      hiC.width = hiVp.width; hiC.height = hiVp.height;
+      await page.render({ canvasContext: hiC.getContext('2d'), viewport: hiVp }).promise;
+      st.pageImageHires[pageNum] = hiC.toDataURL('image/jpeg', 0.74).split(',')[1];
+
+      // Thumbnail para exibição (~260px)
+      const thScale = Math.min(260 / baseVp.width, 1.0);
+      const thVp    = page.getViewport({ scale: thScale });
+      const thC     = document.createElement('canvas');
+      thC.width = thVp.width; thC.height = thVp.height;
+      await page.render({ canvasContext: thC.getContext('2d'), viewport: thVp }).promise;
+      st.pageThumbnails[pageNum] = thC.toDataURL('image/jpeg', 0.68);
+
+      // Atualiza card na galeria
+      const el = document.getElementById(`imgt-${pageNum}`);
+      if (el) {
+        el.querySelector('.img-spin')?.remove();
+        el.insertAdjacentHTML('afterbegin',
+          `<img src="${st.pageThumbnails[pageNum]}" alt="Página ${pageNum}" loading="lazy">`);
+      }
+
+      done++;
+      status.textContent = `${done}/${pages.length} páginas renderizadas`;
+    } catch { done++; }
+  }
+
+  status.textContent = `${done} página${done!==1?'s':''} • toque para incluir/remover da prova`;
+  updateImgSelInfo();
+  st.imgRendering = false;
+
+  // Anima scroll para a galeria
+  setTimeout(() => imgSec.scrollIntoView({ behavior:'smooth', block:'nearest' }), 120);
+}
+
+function togImgPage(el) {
+  const p = parseInt(el.dataset.pg);
+  el.classList.toggle('on');
+  el.classList.contains('on') ? st.selectedImgPages.add(p) : st.selectedImgPages.delete(p);
+  updateImgSelInfo();
+}
+
+function updateImgSelInfo() {
+  const n   = st.selectedImgPages.size;
+  const inf = document.getElementById('img-sel-info');
+  if (!inf) return;
+  if (n > 0) {
+    inf.className = 'img-sel-info has';
+    inf.textContent = `✓ ${n} página${n!==1?'s':''} com imagens → a IA usará como base para gráficos, tabelas e charges`;
+  } else {
+    inf.className = 'img-sel-info none';
+    inf.textContent = '○ Nenhuma imagem selecionada — prova somente com texto';
+  }
+}
+
+// ── Extrai imagens (usa cache da galeria ou renderiza on-demand) ──────
+async function extractPageImages() {
+  const imgPages = st.selectedImgPages.size > 0 ? st.selectedImgPages : st.selectedPages;
+  if (!st.bookPdf || imgPages.size === 0) return [];
+
+  const images = [];
+  // Máx 4 imagens (limite multimodal do modelo)
+  const pages = [...imgPages].sort((a,b) => a-b).slice(0, 4);
+
+  for (const pageNum of pages) {
+    // Usa cache se disponível (da galeria), senão renderiza
+    if (st.pageImageHires[pageNum]) {
+      images.push({ mimeType: 'image/jpeg', data: st.pageImageHires[pageNum] });
+      continue;
+    }
+    try {
+      const page = await st.bookPdf.getPage(pageNum);
+      const vp   = page.getViewport({ scale: Math.min(850 / page.getViewport({scale:1}).width, 1.4) });
+      const c    = document.createElement('canvas');
+      c.width = vp.width; c.height = vp.height;
+      await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      images.push({ mimeType: 'image/jpeg', data: c.toDataURL('image/jpeg', 0.74).split(',')[1] });
     } catch {}
   }
   return images;
