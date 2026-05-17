@@ -528,7 +528,7 @@ body { padding-bottom: env(safe-area-inset-bottom); }
         </div>
       </div>
       <div style="margin-top:16px">
-        <label>Conteúdo / Tópicos abordados *</label>
+        <label id="f-conteudo-label">Conteúdo / Tópicos abordados *</label>
         <textarea id="f-conteudo" rows="3" placeholder="Ex: Revolução Francesa — causas, fases, consequências e impactos na Europa moderna..."></textarea>
       </div>
       <div style="margin-top:16px">
@@ -612,12 +612,28 @@ body { padding-bottom: env(safe-area-inset-bottom); }
                         color:var(--cream);padding:10px 12px;font-size:13px">
         </div>
 
+        <!-- Galeria de imagens/gráficos -->
+        <div id="mat-images-section" style="display:none">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div style="font-size:13px;font-weight:600;color:var(--gold)">
+              🖼️ Imagens e Gráficos
+            </div>
+            <span style="font-size:11px;color:var(--muted)">Selecione até 4 para usar nas questões</span>
+          </div>
+          <div id="mat-img-loading" style="display:none;font-size:12px;color:var(--muted);margin-bottom:8px">
+            ⏳ Extraindo imagens…
+          </div>
+          <div id="mat-image-gallery"
+               style="display:flex;flex-wrap:wrap;gap:8px;max-height:230px;overflow-y:auto;padding-right:4px"></div>
+          <div id="mat-img-count" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+        </div>
+
         <!-- Dica -->
         <div style="background:rgba(45,106,94,0.1);border:1px solid rgba(45,106,94,0.25);
                     border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.8">
-          💡 A IA identificará o <strong style="color:var(--cream)">SUMÁRIO</strong> do material,
-          localizará o capítulo selecionado e baseará as questões <strong style="color:var(--cream)">
-          exclusivamente</strong> no conteúdo desse capítulo.
+          💡 A IA lê o <strong style="color:var(--cream)">SUMÁRIO</strong>, extrai o conteúdo do
+          capítulo e cria questões <strong style="color:var(--cream)">100% baseadas no livro</strong>.
+          Selecione imagens/gráficos para que a IA formule questões sobre eles.
         </div>
       </div>
     </div>
@@ -1254,15 +1270,19 @@ async function handleMaterialFile(input) {
   state.materialChapterIdx = -1;
   state.materialChapterManual = '';
 
+  state.materialImages       = [];
+  state.materialSelectedImgs = new Set();
+
   try {
+    // 1. Extrai texto
     let text = '';
     if (kind === 'pdf') {
       text = await extractPdfText(file);
     } else {
       text = await extractDocxText(file);
     }
-
     state.materialText = text;
+
     const chapters = parseSumario(text);
     state.materialChapters = chapters;
 
@@ -1272,10 +1292,26 @@ async function handleMaterialFile(input) {
 
     renderChapterChips(chapters);
     document.getElementById('mat-chapters-section').style.display = '';
-    showToast(`Material carregado! ${chapters.length} capítulo(s) detectado(s) no sumário.`, 'ok', 4000);
+
+    // 2. Extrai imagens (assíncrono em background)
+    document.getElementById('mat-img-loading').style.display = '';
+    document.getElementById('mat-images-section').style.display = '';
+    const imgs = kind === 'pdf'
+      ? await extractPdfImages(file)
+      : await extractDocxImages(file);
+
+    state.materialImages = imgs;
+    document.getElementById('mat-img-loading').style.display = 'none';
+    renderImageGallery(imgs);
+
+    showToast(
+      `Material carregado! ${chapters.length} capítulo(s) e ${imgs.length} imagem(ns) encontrada(s).`,
+      'ok', 5000
+    );
   } catch (e) {
     document.getElementById('mat-file-status').textContent = 'Erro ao processar.';
-    document.getElementById('mat-progress').style.display = 'none';
+    document.getElementById('mat-progress').style.display  = 'none';
+    document.getElementById('mat-img-loading').style.display = 'none';
     showToast('Erro ao ler o material: ' + e.message, 'error', 6000);
     console.error(e);
   }
@@ -1441,40 +1477,188 @@ function renderChapterChips(chapters) {
   });
 }
 
-// ── Seleciona capítulo ────────────────────────────────────────
+// ── Seleciona capítulo e auto-preenche "Conteúdo" ────────────
 function selectMaterialChapter(idx) {
-  state.materialChapterIdx  = idx;
+  state.materialChapterIdx    = idx;
   state.materialChapterManual = '';
   document.getElementById('mat-chapter-manual').value = '';
 
-  // Destaca o chip selecionado
-  const chips = document.querySelectorAll('#mat-chapter-chips .chip');
-  chips.forEach((c, i) => {
-    c.classList.toggle('active', i === idx);
-  });
-  showToast(`📖 "${state.materialChapters[idx].title}" selecionado.`, 'ok', 3000);
+  const title = state.materialChapters[idx].title;
+
+  // Auto-preenche o campo "Conteúdo / Tópicos"
+  document.getElementById('f-conteudo').value = title;
+  document.getElementById('f-conteudo-label').innerHTML =
+    'Capítulo de referência <span style="color:var(--gold);font-size:11px">📚 do material</span>';
+
+  // Destaca chip selecionado
+  document.querySelectorAll('#mat-chapter-chips .chip')
+    .forEach((c, i) => c.classList.toggle('active', i === idx));
+
+  showToast(`📖 "${title}" selecionado como base da prova.`, 'ok', 3000);
 }
 
 function onManualChapter() {
-  const val = document.getElementById('mat-chapter-manual').value;
+  const val = document.getElementById('mat-chapter-manual').value.trim();
   state.materialChapterManual = val;
   state.materialChapterIdx    = -1;
-  // Desmarca chips
   document.querySelectorAll('#mat-chapter-chips .chip').forEach(c => c.classList.remove('active'));
+
+  if (val) {
+    document.getElementById('f-conteudo').value = val;
+    document.getElementById('f-conteudo-label').innerHTML =
+      'Capítulo de referência <span style="color:var(--gold);font-size:11px">📚 do material</span>';
+  } else {
+    document.getElementById('f-conteudo-label').textContent = 'Conteúdo / Tópicos abordados *';
+  }
 }
 
 function removeMaterial() {
-  state.materialText          = '';
-  state.materialFileName      = '';
-  state.materialChapters      = [];
-  state.materialChapterIdx    = -1;
-  state.materialChapterManual = '';
+  state.materialText           = '';
+  state.materialFileName       = '';
+  state.materialChapters       = [];
+  state.materialChapterIdx     = -1;
+  state.materialChapterManual  = '';
+  state.materialImages         = [];
+  state.materialSelectedImgs   = new Set();
   document.getElementById('mat-file-input').value = '';
-  document.getElementById('mat-empty').style.display  = '';
-  document.getElementById('mat-loaded').style.display = 'none';
+  document.getElementById('mat-empty').style.display    = '';
+  document.getElementById('mat-loaded').style.display   = 'none';
   document.getElementById('mat-chapters-section').style.display = 'none';
-  document.getElementById('mat-badge').style.display = 'none';
+  document.getElementById('mat-images-section').style.display   = 'none';
+  document.getElementById('mat-badge').style.display   = 'none';
   document.getElementById('mat-progress').style.display = 'none';
+  document.getElementById('f-conteudo-label').textContent = 'Conteúdo / Tópicos abordados *';
+}
+
+// ── Redimensiona imagem via canvas (max px, qualidade) ────────
+async function resizeToJpeg(src, maxPx = 640, quality = 0.68) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width  = Math.round(img.width  * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(src); // fallback sem resize
+    img.src = src;
+  });
+}
+
+// ── Extrai imagens de DOCX (word/media/) ──────────────────────
+async function extractDocxImages(file) {
+  const ab  = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(ab);
+  const mediaKeys = Object.keys(zip.files)
+    .filter(k => /^word\/media\/.+\.(png|jpe?g|gif|bmp|webp)$/i.test(k))
+    .slice(0, 20);
+
+  const images = [];
+  for (const key of mediaKeys) {
+    const ext  = key.split('.').pop().toLowerCase();
+    const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+               : ext === 'png' ? 'image/png' : `image/${ext}`;
+    const b64  = await zip.file(key).async('base64');
+    const raw  = `data:${mime};base64,${b64}`;
+    const src  = await resizeToJpeg(raw);
+    images.push({ src, name: key.split('/').pop(), mimeType: 'image/jpeg' });
+  }
+  return images;
+}
+
+// ── Extrai páginas de PDF como imagens (canvas) ───────────────
+async function extractPdfImages(file) {
+  const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
+  if (!pdfjsLib) return [];
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  const ab  = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+  const images = [];
+  const totalPages = Math.min(pdf.numPages, 12); // máximo 12 páginas
+
+  for (let p = 1; p <= totalPages; p++) {
+    const page     = await pdf.getPage(p);
+    const viewport = page.getViewport({ scale: 1.4 });
+    const canvas   = document.createElement('canvas');
+    canvas.width   = viewport.width;
+    canvas.height  = viewport.height;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    const src = await resizeToJpeg(canvas.toDataURL('image/jpeg', 0.72));
+    images.push({ src, name: `Página ${p}`, mimeType: 'image/jpeg' });
+  }
+  return images;
+}
+
+// ── Renderiza galeria de imagens ──────────────────────────────
+function renderImageGallery(images) {
+  const gallery = document.getElementById('mat-image-gallery');
+  const count   = document.getElementById('mat-img-count');
+  gallery.innerHTML = '';
+
+  if (!images.length) {
+    gallery.innerHTML = '<span style="font-size:12px;color:var(--muted)">Nenhuma imagem encontrada no material.</span>';
+    count.textContent = '';
+    return;
+  }
+
+  images.forEach((img, idx) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = `
+      position:relative;width:90px;height:90px;border-radius:8px;overflow:hidden;
+      cursor:pointer;border:2px solid rgba(255,255,255,0.12);transition:.2s;flex-shrink:0`;
+    wrap.title = img.name;
+
+    const thumb = document.createElement('img');
+    thumb.src = img.src;
+    thumb.style.cssText = 'width:100%;height:100%;object-fit:cover';
+
+    const label = document.createElement('div');
+    label.style.cssText = `
+      position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.65);
+      font-size:9px;color:#ccc;padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
+    label.textContent = img.name;
+
+    const check = document.createElement('div');
+    check.id = `img-check-${idx}`;
+    check.style.cssText = `
+      position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;
+      background:var(--gold);color:#111;font-size:11px;font-weight:800;
+      display:none;align-items:center;justify-content:center;z-index:2`;
+    check.textContent = '✓';
+
+    wrap.appendChild(thumb);
+    wrap.appendChild(label);
+    wrap.appendChild(check);
+    wrap.onclick = () => toggleImageSelection(idx);
+    gallery.appendChild(wrap);
+  });
+
+  count.textContent = `${images.length} imagem(ns) disponível(is) — selecione as que têm gráficos, tabelas ou figuras relevantes`;
+  document.getElementById('mat-images-section').style.display = '';
+}
+
+// ── Marca/desmarca imagem selecionada ─────────────────────────
+function toggleImageSelection(idx) {
+  const sel  = state.materialSelectedImgs;
+  const check = document.getElementById(`img-check-${idx}`);
+  const wraps = document.querySelectorAll('#mat-image-gallery > div');
+
+  if (sel.has(idx)) {
+    sel.delete(idx);
+    if (check) check.style.display = 'none';
+    if (wraps[idx]) wraps[idx].style.border = '2px solid rgba(255,255,255,0.12)';
+  } else {
+    if (sel.size >= 4) { showToast('Máximo de 4 imagens por prova.', 'error'); return; }
+    sel.add(idx);
+    if (check) { check.style.display = 'flex'; }
+    if (wraps[idx]) wraps[idx].style.border = '2px solid var(--gold)';
+  }
+  document.getElementById('mat-img-count').textContent =
+    `${sel.size} selecionada(s) de ${state.materialImages.length} disponível(is)`;
 }
 
 function buildPrompt() {
@@ -1520,49 +1704,67 @@ function buildPrompt() {
       chapterText = state.materialText.slice(0, 3000);
     }
 
+    const numImgs = state.materialSelectedImgs ? state.materialSelectedImgs.size : 0;
+    const imgInstr = numImgs > 0
+      ? `\nIMAGENS/GRÁFICOS FORNECIDOS (${numImgs} imagem(ns)):
+- As imagens/gráficos do livro estão anexadas a esta mensagem.
+- Analise CADA imagem com atenção: leia eixos, legendas, títulos, tabelas e valores.
+- Crie pelo menos ${Math.min(numImgs, 3)} questão(ões) que refiram DIRETAMENTE a uma das imagens.
+- No enunciado da questão, indique "Observe o gráfico/figura/tabela a seguir:" antes de perguntar.
+- No gabarito, explique o que a imagem mostra e como ela fundamenta a resposta.\n`
+      : '';
+
     materialBlock = `
 
-════════════════════════════════════════
-MATERIAL DE REFERÊNCIA — "${state.materialFileName}"
-${chapterRef ? `CAPÍTULO / SEÇÃO SELECIONADO: ${chapterRef}` : 'TRECHO INICIAL DO MATERIAL'}
-════════════════════════════════════════
+════════════════════════════════════════════════════════
+MATERIAL DE REFERÊNCIA OFICIAL
+Arquivo: "${state.materialFileName}"
+${chapterRef ? `Capítulo / Seção: ${chapterRef}` : 'Trecho inicial do material'}
+════════════════════════════════════════════════════════
 
-INSTRUÇÕES ESPECIAIS PARA O USO DO MATERIAL:
-1. Identifique o SUMÁRIO do material para entender a estrutura completa.
-2. Localize o capítulo "${chapterRef || 'indicado pelo conteúdo abaixo'}" e use-o como ÚNICA fonte de referência.
-3. Extraia conceitos, termos técnicos, exemplos e dados DIRETAMENTE deste capítulo.
-4. As questões devem ser elaboradas com base EXCLUSIVA no trecho abaixo — não invente conteúdo.
-5. Cite termos e exemplos que aparecem explicitamente no material.
-
---- TRECHO DO MATERIAL ---
+REGRAS ABSOLUTAS — LEIA ANTES DE GERAR:
+1. SUMÁRIO: O trecho abaixo começa pelo capítulo selecionado. Use-o para entender o índice e localizar o conteúdo.
+2. EXCLUSIVIDADE: Todas as questões devem ser elaboradas com base EXCLUSIVAMENTE no trecho do material fornecido abaixo. NÃO use conhecimento externo, NÃO invente dados, exemplos ou conceitos que não estejam no texto.
+3. FIDELIDADE: Cite textualmente termos, nomes, datas, valores e exemplos que aparecem no material.
+4. REFERÊNCIA: Em cada questão mencione "Conforme o material '${state.materialFileName}'..." ou referencie o capítulo.
+5. GABARITO: No gabarito indique em qual trecho/parágrafo do material a resposta é encontrada.
+6. PROFUNDIDADE: Explore diferentes níveis cognitivos: memorização, compreensão, aplicação e análise — todos ancorados no texto.
+${imgInstr}
+════════ TRECHO DO MATERIAL (CAPÍTULO SELECIONADO) ════════
 ${chapterText}
---- FIM DO MATERIAL ---
+═══════════════════════════════════════════════════════════
 `;
   }
 
-  return `Você é um professor especialista em ${disc}. Crie uma prova escolar completa e bem elaborada.
+  const baseRole = hasMaterial
+    ? `Você é um professor especialista em ${disc} que está elaborando uma prova com base EXCLUSIVA no material de referência fornecido.`
+    : `Você é um professor especialista em ${disc}. Crie uma prova escolar completa e bem elaborada.`;
 
-ESPECIFICAÇÕES:
+  return `${baseRole}
+${materialBlock}
+ESPECIFICAÇÕES DA PROVA:
 - Disciplina: ${disc}
 - Série/Ano: ${serie}
-- Conteúdo: ${cont}
+- ${hasMaterial ? 'Capítulo de referência' : 'Conteúdo'}: ${cont}
 - Tipo de questões: ${tipoLabel}
 - Dificuldade: ${difLabel}
 - Número de questões: ${state.numQ}
-${inst ? `- Instruções especiais: ${inst}` : ''}
-${hasMaterial ? `- BASE as questões EXCLUSIVAMENTE no material de referência fornecido abaixo.` : ''}
-${materialBlock}
-FORMATO OBRIGATÓRIO DA SAÍDA:
-1. Liste as questões numeradas: "1. enunciado da questão"
-2. Para múltipla escolha, alternativas em linhas separadas: "A)", "B)", "C)", "D)", "E)"
-3. Para V/F: "( ) Verdadeiro  ( ) Falso" após o enunciado
-4. Para discursivas: "Resposta: ___"
-5. NÃO inclua cabeçalho
-6. Após todas as questões, escreva exatamente: ---GABARITO---
-7. Depois liste o gabarito comentado de cada questão
-${hasMaterial ? `8. No gabarito, indique a página/seção do material onde a resposta pode ser encontrada.` : ''}
+${inst ? `- Instruções adicionais: ${inst}` : ''}
 
-${hasMaterial ? 'Use os exemplos e termos do material de referência. Cite o capítulo nas respostas do gabarito.' : 'Use contextos do cotidiano, seja criativo, avalie diferentes níveis cognitivos.'}`;
+FORMATO OBRIGATÓRIO DA SAÍDA:
+1. Questões numeradas: "1. enunciado"
+2. Múltipla escolha: alternativas em linhas separadas "A)", "B)", "C)", "D)", "E)"
+3. V/F: "( ) Verdadeiro  ( ) Falso" após o enunciado
+4. Discursivas: "Resposta: ___"
+5. NÃO inclua cabeçalho
+6. Após todas as questões escreva exatamente: ---GABARITO---
+7. Liste o gabarito comentado de cada questão
+${hasMaterial ? `8. No gabarito indique o trecho do material que fundamenta a resposta (ex: "Conforme o material, parágrafo sobre X...")` : ''}
+
+${hasMaterial
+  ? 'ATENÇÃO: Qualquer questão que não estiver fundamentada no material fornecido será considerada inválida. Mantenha 100% de fidelidade ao livro.'
+  : 'Use contextos do cotidiano, seja criativo e avalie diferentes níveis cognitivos.'}
+`;
 }
 
 // ── STREAMING STATS ────────────────────────────────────────
@@ -1600,11 +1802,26 @@ async function gerarProva() {
 
   let accumulated = '';
 
+  // Coleta imagens selecionadas (base64 sem o prefixo data:...,)
+  const selectedImages = [];
+  if (state.materialSelectedImgs && state.materialSelectedImgs.size > 0) {
+    for (const idx of state.materialSelectedImgs) {
+      const img = state.materialImages[idx];
+      if (!img) continue;
+      const b64 = img.src.includes(',') ? img.src.split(',')[1] : img.src;
+      selectedImages.push({ data: b64, mimeType: img.mimeType || 'image/jpeg' });
+      if (selectedImages.length >= 4) break;
+    }
+  }
+
+  const reqBody = { prompt: buildPrompt() };
+  if (selectedImages.length > 0) reqBody.images = selectedImages;
+
   try {
     const res = await fetch('/api/gerar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ prompt: buildPrompt() }),
+      body: JSON.stringify(reqBody),
     });
 
     if (!res.ok) {

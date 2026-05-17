@@ -66,11 +66,28 @@ app.get('/api/status', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-// ── POST /api/gerar — OpenRouter streaming via SSE ───────────────────────────
+// ── POST /api/gerar — OpenRouter streaming via SSE (suporta multimodal) ──────
 app.post('/api/gerar', auth, async (req, res) => {
-  const { prompt } = req.body;
+  const { prompt, images } = req.body;
   if (!prompt || typeof prompt !== 'string' || prompt.length < 20) {
     return res.status(400).json({ error: 'Prompt inválido.' });
+  }
+
+  // Constrói conteúdo da mensagem — texto puro ou texto + imagens (multimodal)
+  const imgs = Array.isArray(images) ? images.slice(0, 4) : [];
+  let messageContent;
+  if (imgs.length > 0) {
+    messageContent = [
+      { type: 'text', text: prompt },
+      ...imgs.map(img => ({
+        type: 'image_url',
+        image_url: {
+          url: `data:${img.mimeType || 'image/jpeg'};base64,${img.data}`,
+        },
+      })),
+    ];
+  } else {
+    messageContent = prompt;
   }
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -93,7 +110,7 @@ app.post('/api/gerar', auth, async (req, res) => {
         model:      OR_MODEL,
         stream:     true,
         max_tokens: 4096,
-        messages:   [{ role: 'user', content: prompt }],
+        messages:   [{ role: 'user', content: messageContent }],
       }),
     });
 
