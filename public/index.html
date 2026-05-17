@@ -596,6 +596,9 @@ body { padding-bottom: env(safe-area-inset-bottom); }
         <div id="mat-chapters-section" style="display:none">
           <div style="font-size:13px;font-weight:600;color:var(--gold);margin-bottom:10px">
             📑 Capítulos detectados no Sumário
+            <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:6px">
+              — selecione um ou mais
+            </span>
           </div>
           <div id="mat-chapter-chips"
                style="display:flex;flex-wrap:wrap;gap:7px;max-height:180px;overflow-y:auto;
@@ -788,11 +791,12 @@ const state = {
   historyData: [],
   currentView: 'auth',
   // Material de referência
-  materialText: '',          // texto completo extraído
+  materialText: '',               // texto completo com marcadores [P{n}]
   materialFileName: '',
-  materialChapters: [],      // [{title, startIdx}]
-  materialChapterIdx: -1,    // índice selecionado (−1 = nenhum)
-  materialChapterManual: '', // digitado manualmente
+  materialChapters: [],           // [{title, pageNum}]
+  materialSelectedChapters: new Set(), // índices selecionados (multi)
+  materialChapterIdx: -1,         // mantido por compatibilidade
+  materialChapterManual: '',      // digitado manualmente
 };
 
 // ── INIT ───────────────────────────────────────────────────
@@ -1265,13 +1269,13 @@ async function handleMaterialFile(input) {
   document.getElementById('mat-badge').style.display = '';
   document.getElementById('mat-chapters-section').style.display = 'none';
 
-  state.materialFileName = file.name;
-  state.materialChapters = [];
-  state.materialChapterIdx = -1;
-  state.materialChapterManual = '';
-
-  state.materialImages       = [];
-  state.materialSelectedImgs = new Set();
+  state.materialFileName         = file.name;
+  state.materialChapters         = [];
+  state.materialSelectedChapters = new Set();
+  state.materialChapterIdx       = -1;
+  state.materialChapterManual    = '';
+  state.materialImages           = [];
+  state.materialSelectedImgs     = new Set();
 
   try {
     // 1. Extrai texto
@@ -1317,42 +1321,47 @@ async function handleMaterialFile(input) {
   }
 }
 
-// ── Extração de texto de PDF via pdf.js ───────────────────────
+// ── Extração de texto de PDF com MARCADORES DE PÁGINA ─────────
+// Cada página vira [P{n}] no texto → permite localizar conteúdo
+// real pelo número de página do SUMÁRIO.
 async function extractPdfText(file) {
   const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
   if (!pdfjsLib) throw new Error('pdf.js não carregado.');
-
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-  const ab  = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+  const ab    = await file.arrayBuffer();
+  const pdf   = await pdfjsLib.getDocument({ data: ab }).promise;
   const total = pdf.numPages;
-  let text = '';
-
-  const bar = document.getElementById('mat-progress-bar');
-  const lbl = document.getElementById('mat-progress-label');
+  const bar   = document.getElementById('mat-progress-bar');
+  const lbl   = document.getElementById('mat-progress-label');
+  let text    = '';
 
   for (let p = 1; p <= total; p++) {
     const page    = await pdf.getPage(p);
     const content = await page.getTextContent();
-    const pageText = content.items.map(i => i.str).join(' ');
-    text += pageText + '\n';
-    const pct = Math.round((p / total) * 100);
-    bar.style.width = pct + '%';
+    // Junta os spans respeitando espaços entre palavras
+    let pageText  = '';
+    let lastX     = null;
+    for (const item of content.items) {
+      if (lastX !== null && Math.abs(item.transform[4] - lastX) > 10) pageText += ' ';
+      pageText += item.str;
+      lastX = item.transform[4] + (item.width || 0);
+    }
+    text += `\n[P${p}]\n${pageText.trim()}\n`;
+    bar.style.width = Math.round((p / total) * 100) + '%';
     lbl.textContent = `Extraindo página ${p} de ${total}…`;
   }
   return text;
 }
 
-// ── Extração de texto de DOCX via JSZip ──────────────────────
+// ── Extração de texto de DOCX com marcadores de título ────────
 async function extractDocxText(file) {
   if (!window.JSZip) throw new Error('JSZip não carregado.');
   const ab  = await file.arrayBuffer();
   const zip = await JSZip.loadAsync(ab);
   const xml = await zip.file('word/document.xml').async('string');
 
-  // Converte parágrafos Word em linhas de texto
   const parser = new DOMParser();
   const doc    = parser.parseFromString(xml, 'application/xml');
   const wNS    = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -1360,69 +1369,79 @@ async function extractDocxText(file) {
   const lines  = [];
 
   for (const p of paras) {
-    const runs = p.getElementsByTagNameNS(wNS, 't');
+    // Detecta estilo de parágrafo (Heading, Título, etc.)
+    const pStyle = p.getElementsByTagNameNS(wNS, 'pStyle')[0];
+    const style  = pStyle ? (pStyle.getAttribute('w:val') || '') : '';
+    const isHdr  = /^(heading|h[ead]|[Tt][íi]tulo)/i.test(style);
+
     let line = '';
-    for (const r of runs) line += r.textContent;
-    if (line.trim()) lines.push(line.trim());
+    for (const r of p.getElementsByTagNameNS(wNS, 't')) line += r.textContent;
+    if (!line.trim()) continue;
+
+    // Parágrafos em negrito completo também são tratados como título
+    const bolds = p.getElementsByTagNameNS(wNS, 'b');
+    const runs  = p.getElementsByTagNameNS(wNS, 'r');
+    const allBold = runs.length > 0 && bolds.length >= runs.length;
+
+    lines.push((isHdr || allBold) ? `[H] ${line.trim()}` : line.trim());
   }
 
-  const bar = document.getElementById('mat-progress-bar');
-  bar.style.width = '100%';
+  document.getElementById('mat-progress-bar').style.width = '100%';
   return lines.join('\n');
 }
 
-// ── Parser de SUMÁRIO ─────────────────────────────────────────
+// ── Parser de SUMÁRIO — extrai título E número de página ──────
 function parseSumario(text) {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // Padrões que identificam uma linha de capítulo no sumário ou no corpo
-  const isChapterLine = (s) =>
+  const isChapterLine = s =>
     /^cap[ií]tulo\s+\d+/i.test(s) ||
     /^unidade\s+\d+/i.test(s)      ||
     /^módulo\s+\d+/i.test(s)       ||
     /^tema\s+\d+/i.test(s)         ||
+    /^se[çc][aã]o\s+\d+/i.test(s) ||
     /^\d{1,2}[\.\)]\s+[A-ZÁÀÃÉÊÍÓÔÕÚÇ]/u.test(s);
 
-  // Remove página do fim da linha: "..........12" ou "   34"
-  const cleanTitle = (s) => s
-    .replace(/\.{3,}\s*\d+\s*$/, '')
-    .replace(/\s+\d{1,4}\s*$/, '')
+  // Extrai número de página do final da linha do sumário (ex: "......45" ou "  45")
+  const extractPage = s => {
+    const m = s.match(/[\.\·\s]+(\d{1,4})\s*$/);
+    return m ? parseInt(m[1]) : null;
+  };
+
+  // Remove número de página e pontos do título
+  const cleanTitle = s => s
+    .replace(/[\.\·]{2,}\s*\d+\s*$/, '')
+    .replace(/\s{2,}\d{1,4}\s*$/, '')
     .trim();
 
   const chapters = [];
 
-  // 1. Tenta localizar seção SUMÁRIO
-  let sumStart = lines.findIndex(l => /^(sum[aá]rio|sum[aá]rio geral|[íi]ndice|conte[úu]do)/i.test(l));
+  // 1. Localiza seção do SUMÁRIO no texto
+  const sumLine = lines.findIndex(l =>
+    /^(sum[aá]rio|[íi]ndice geral|conte[úu]do)/i.test(l)
+  );
 
-  if (sumStart !== -1) {
-    // Extrai capítulos até aparecer o primeiro parágrafo "real" (não sumário)
-    for (let i = sumStart + 1; i < Math.min(sumStart + 150, lines.length); i++) {
+  if (sumLine !== -1) {
+    for (let i = sumLine + 1; i < Math.min(sumLine + 200, lines.length); i++) {
       const l = lines[i];
-      if (isChapterLine(l)) {
-        const title = cleanTitle(l);
-        if (title.length > 4 && title.length < 120) {
-          // Encontra onde esse capítulo começa no texto completo
-          const startIdx = findChapterStart(text, title);
-          chapters.push({ title, startIdx });
-        }
+      if (!isChapterLine(l)) continue;
+      const pageNum = extractPage(l);
+      const title   = cleanTitle(l);
+      if (title.length > 4 && title.length < 120) {
+        chapters.push({ title, pageNum });
       }
     }
   }
 
-  // 2. Se não achou SUMÁRIO ou achou menos de 2 capítulos, varre o documento inteiro
+  // 2. Fallback: detecta títulos no corpo (ignora os primeiros 15% do texto)
   if (chapters.length < 2) {
     chapters.length = 0;
-    for (let i = 0; i < lines.length; i++) {
-      const l = lines[i];
-      if (isChapterLine(l) && l.length < 100) {
-        const title = cleanTitle(l);
-        if (title.length > 4) {
-          const startIdx = findChapterStart(text, title);
-          // Evita duplicatas (mesmo capítulo aparecendo no sumário e no corpo)
-          if (!chapters.some(c => c.title.slice(0,20) === title.slice(0,20))) {
-            chapters.push({ title, startIdx });
-          }
-        }
+    const bodyLines = lines.slice(Math.floor(lines.length * 0.15));
+    for (const l of bodyLines) {
+      if (!isChapterLine(l) || l.length > 100) continue;
+      const title = cleanTitle(l);
+      if (title.length > 4 && !chapters.some(c => c.title.slice(0,15) === title.slice(0,15))) {
+        chapters.push({ title, pageNum: null });
       }
     }
   }
@@ -1430,96 +1449,176 @@ function parseSumario(text) {
   return chapters;
 }
 
-// Localiza onde um capítulo começa no texto completo (índice de caractere)
-function findChapterStart(text, title) {
-  // Busca exata primeiro, depois normalizada
-  let idx = text.indexOf(title);
-  if (idx !== -1) return idx;
-  // Busca insensível a maiúsculas / acentos
-  const norm = title.slice(0, 30).toLowerCase();
-  idx = text.toLowerCase().indexOf(norm);
-  return idx !== -1 ? idx : 0;
+// ── Localiza início de capítulo no texto — PULA o SUMÁRIO ─────
+// O SUMÁRIO ocupa no máximo os primeiros 12% do documento.
+// Busca a partir do offset 12% para encontrar o corpo real.
+function findChapterBodyStart(text, title, sumarioEndOffset) {
+  const searchFrom = sumarioEndOffset ?? Math.floor(text.length * 0.12);
+  const body = text.slice(searchFrom);
+
+  // Tenta correspondência exata
+  let idx = body.indexOf(title);
+  if (idx !== -1) return searchFrom + idx;
+
+  // Tenta prefixo (primeiros 25 chars, case-insensitive)
+  const prefix = title.slice(0, 25).toLowerCase();
+  idx = body.toLowerCase().indexOf(prefix);
+  if (idx !== -1) return searchFrom + idx;
+
+  // Tenta só o número do capítulo ("Capítulo 3")
+  const numMatch = title.match(/\d+/);
+  if (numMatch) {
+    const numPat = new RegExp(`cap[ií]tulo\\s+${numMatch[0]}`, 'i');
+    const m = body.match(numPat);
+    if (m) return searchFrom + body.indexOf(m[0]);
+  }
+
+  return searchFrom; // fallback
 }
 
-// Extrai o texto do capítulo selecionado (até 5 000 chars para o prompt)
-function getChapterContent(chapterIdx) {
+// ── Extrai conteúdo do(s) capítulo(s) selecionado(s) ──────────
+// Usa marcadores [P{n}] quando o SUMÁRIO fornece número de página.
+// Caso contrário, busca no corpo após o SUMÁRIO.
+function getChapterContent(indices) {
   const chapters = state.materialChapters;
-  if (!chapters.length || chapterIdx < 0) return state.materialText.slice(0, 4000);
+  const text     = state.materialText;
+  if (!chapters.length || !indices.length) return text.slice(0, 6000);
 
-  const ch   = chapters[chapterIdx];
-  const next = chapters[chapterIdx + 1];
-  const start = ch.startIdx;
-  const end   = next ? next.startIdx : state.materialText.length;
+  const LIMIT_PER = 8000; // chars por capítulo selecionado
 
-  let snippet = state.materialText.slice(start, end).trim();
-  if (snippet.length > 5000) snippet = snippet.slice(0, 5000) + '\n[… conteúdo abreviado …]';
-  return snippet;
+  const parts = [];
+
+  for (const idx of indices) {
+    const ch   = chapters[idx];
+    const next = chapters[idx + 1] ?? null;
+    let content = '';
+
+    // ── Estratégia 1: marcador de página [P{n}] ─────────────
+    if (ch.pageNum) {
+      const startMark = `[P${ch.pageNum}]`;
+      const endMark   = next?.pageNum ? `[P${next.pageNum}]` : null;
+      const si = text.indexOf(startMark);
+      if (si !== -1) {
+        const ei = endMark ? text.indexOf(endMark) : text.length;
+        content = text.slice(si, ei !== -1 ? ei : text.length).trim();
+      }
+    }
+
+    // ── Estratégia 2: busca pelo título no corpo (após sumário)
+    if (!content) {
+      const sumEnd = Math.floor(text.length * 0.15);
+      const si = findChapterBodyStart(text, ch.title, sumEnd);
+      let ei = text.length;
+      if (next) {
+        const nextSi = findChapterBodyStart(text, next.title, si + 100);
+        if (nextSi > si) ei = nextSi;
+      }
+      content = text.slice(si, ei).trim();
+    }
+
+    // Remove marcadores [P{n}] do texto antes de enviar para a IA
+    content = content.replace(/\[P\d+\]\n?/g, '\n');
+
+    if (content.length > LIMIT_PER) {
+      content = content.slice(0, LIMIT_PER) + '\n[… conteúdo continua no livro …]';
+    }
+
+    parts.push(`=== ${ch.title} ===\n${content}`);
+  }
+
+  return parts.join('\n\n');
 }
 
-// ── Renderiza chips de capítulo ───────────────────────────────
+// ── Renderiza chips com MULTI-SELEÇÃO ─────────────────────────
 function renderChapterChips(chapters) {
   const container = document.getElementById('mat-chapter-chips');
   container.innerHTML = '';
 
   if (!chapters.length) {
-    container.innerHTML = '<span style="font-size:12px;color:var(--muted)">Sumário não encontrado automaticamente — use o campo abaixo.</span>';
+    container.innerHTML =
+      '<span style="font-size:12px;color:var(--muted)">Sumário não detectado — use o campo abaixo.</span>';
     return;
   }
+
+  const info = document.createElement('div');
+  info.style.cssText = 'font-size:11px;color:var(--muted);margin-bottom:8px;width:100%';
+  info.textContent = 'Clique para selecionar um ou mais capítulos (página no sumário entre parênteses):';
+  container.appendChild(info);
 
   chapters.forEach((ch, idx) => {
     const chip = document.createElement('div');
     chip.className = 'chip';
-    chip.textContent = ch.title.length > 55 ? ch.title.slice(0, 55) + '…' : ch.title;
-    chip.title = ch.title;
+    const pageInfo = ch.pageNum ? ` (p.${ch.pageNum})` : '';
+    const label = ch.title.length > 50 ? ch.title.slice(0, 50) + '…' : ch.title;
+    chip.textContent = label + pageInfo;
+    chip.title = ch.title + (ch.pageNum ? ` — página ${ch.pageNum}` : '');
     chip.onclick = () => selectMaterialChapter(idx);
-    chip.style.cssText = 'font-size:12px;cursor:pointer;max-width:100%;white-space:normal;text-align:left;line-height:1.4';
+    chip.style.cssText =
+      'font-size:12px;cursor:pointer;max-width:100%;white-space:normal;text-align:left;line-height:1.4';
+    chip.dataset.idx = idx;
     container.appendChild(chip);
   });
 }
 
-// ── Seleciona capítulo e auto-preenche "Conteúdo" ────────────
+// ── Seleção múltipla de capítulos ─────────────────────────────
 function selectMaterialChapter(idx) {
-  state.materialChapterIdx    = idx;
-  state.materialChapterManual = '';
-  document.getElementById('mat-chapter-manual').value = '';
+  if (!state.materialSelectedChapters) state.materialSelectedChapters = new Set();
+  const sel = state.materialSelectedChapters;
 
-  const title = state.materialChapters[idx].title;
+  // Toggle
+  if (sel.has(idx)) {
+    sel.delete(idx);
+  } else {
+    sel.add(idx);
+  }
 
-  // Auto-preenche o campo "Conteúdo / Tópicos"
-  document.getElementById('f-conteudo').value = title;
-  document.getElementById('f-conteudo-label').innerHTML =
-    'Capítulo de referência <span style="color:var(--gold);font-size:11px">📚 do material</span>';
+  // Atualiza chips
+  document.querySelectorAll('#mat-chapter-chips .chip[data-idx]').forEach(c => {
+    const i = parseInt(c.dataset.idx);
+    c.classList.toggle('active', sel.has(i));
+  });
 
-  // Destaca chip selecionado
-  document.querySelectorAll('#mat-chapter-chips .chip')
-    .forEach((c, i) => c.classList.toggle('active', i === idx));
-
-  showToast(`📖 "${title}" selecionado como base da prova.`, 'ok', 3000);
+  // Auto-preenche "Conteúdo" com todos os capítulos selecionados
+  const titles = [...sel].map(i => state.materialChapters[i]?.title).filter(Boolean);
+  if (titles.length) {
+    state.materialChapterManual = '';
+    document.getElementById('mat-chapter-manual').value = '';
+    document.getElementById('f-conteudo').value = titles.join(' + ');
+    document.getElementById('f-conteudo-label').innerHTML =
+      `${titles.length} capítulo(s) selecionado(s) ` +
+      `<span style="color:var(--gold);font-size:11px">📚 do material</span>`;
+    showToast(`📖 ${titles.length} capítulo(s) selecionado(s).`, 'ok', 2500);
+  } else {
+    document.getElementById('f-conteudo').value = '';
+    document.getElementById('f-conteudo-label').textContent = 'Conteúdo / Tópicos abordados *';
+  }
 }
 
 function onManualChapter() {
   const val = document.getElementById('mat-chapter-manual').value.trim();
   state.materialChapterManual = val;
-  state.materialChapterIdx    = -1;
+  if (!state.materialSelectedChapters) state.materialSelectedChapters = new Set();
+  state.materialSelectedChapters.clear();
   document.querySelectorAll('#mat-chapter-chips .chip').forEach(c => c.classList.remove('active'));
 
   if (val) {
     document.getElementById('f-conteudo').value = val;
     document.getElementById('f-conteudo-label').innerHTML =
-      'Capítulo de referência <span style="color:var(--gold);font-size:11px">📚 do material</span>';
+      'Capítulo informado <span style="color:var(--gold);font-size:11px">📚 do material</span>';
   } else {
     document.getElementById('f-conteudo-label').textContent = 'Conteúdo / Tópicos abordados *';
   }
 }
 
 function removeMaterial() {
-  state.materialText           = '';
-  state.materialFileName       = '';
-  state.materialChapters       = [];
-  state.materialChapterIdx     = -1;
-  state.materialChapterManual  = '';
-  state.materialImages         = [];
-  state.materialSelectedImgs   = new Set();
+  state.materialText              = '';
+  state.materialFileName          = '';
+  state.materialChapters          = [];
+  state.materialSelectedChapters  = new Set();
+  state.materialChapterIdx        = -1;
+  state.materialChapterManual     = '';
+  state.materialImages            = [];
+  state.materialSelectedImgs      = new Set();
   document.getElementById('mat-file-input').value = '';
   document.getElementById('mat-empty').style.display    = '';
   document.getElementById('mat-loaded').style.display   = 'none';
@@ -1685,23 +1784,28 @@ function buildPrompt() {
     let chapterRef   = '';
     let chapterText  = '';
 
-    if (chIdx >= 0 && state.materialChapters[chIdx]) {
-      chapterRef  = state.materialChapters[chIdx].title;
-      chapterText = getChapterContent(chIdx);
+    const selSet = state.materialSelectedChapters;
+    const selIndices = selSet && selSet.size > 0 ? [...selSet].sort((a,b)=>a-b) : [];
+
+    if (selIndices.length > 0) {
+      chapterRef  = selIndices.map(i => state.materialChapters[i]?.title).filter(Boolean).join(' + ');
+      chapterText = getChapterContent(selIndices);
     } else if (manualCh) {
       chapterRef = manualCh;
-      // Localiza o capítulo pelo texto digitado
-      const idx = state.materialText.toLowerCase().indexOf(manualCh.toLowerCase().slice(0, 25));
-      if (idx !== -1) {
-        const nextIdx = state.materialChapters.find(c => c.startIdx > idx)?.startIdx ?? state.materialText.length;
-        let snippet = state.materialText.slice(idx, nextIdx).trim();
-        chapterText = snippet.length > 5000 ? snippet.slice(0, 5000) + '\n[… conteúdo abreviado …]' : snippet;
+      // Localiza o capítulo pelo texto digitado (pula sumário)
+      const sumEnd = Math.floor(state.materialText.length * 0.15);
+      const body   = state.materialText.slice(sumEnd);
+      const si = body.toLowerCase().indexOf(manualCh.toLowerCase().slice(0, 25));
+      if (si !== -1) {
+        let snippet = body.slice(si, si + 8000).trim().replace(/\[P\d+\]\n?/g, '\n');
+        chapterText = snippet.length > 8000 ? snippet.slice(0, 8000) + '\n[… conteúdo abreviado …]' : snippet;
       } else {
-        chapterText = state.materialText.slice(0, 4000);
+        chapterText = state.materialText.slice(sumEnd, sumEnd + 6000).replace(/\[P\d+\]\n?/g, '\n');
       }
     } else {
-      // Nenhum capítulo específico → usa início do material (provável sumário + intro)
-      chapterText = state.materialText.slice(0, 3000);
+      // Nenhum capítulo específico → pula sumário e pega corpo
+      const sumEnd = Math.floor(state.materialText.length * 0.15);
+      chapterText  = state.materialText.slice(sumEnd, sumEnd + 5000).replace(/\[P\d+\]\n?/g, '\n');
     }
 
     const numImgs = state.materialSelectedImgs ? state.materialSelectedImgs.size : 0;
