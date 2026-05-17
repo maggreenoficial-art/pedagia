@@ -82,6 +82,18 @@ textarea { resize: vertical; min-height: 90px; }
 @media (max-width: 720px) { .g3 { grid-template-columns: 1fr 1fr; } .g4 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 600px) { .g2 { grid-template-columns: 1fr; } .g3 { grid-template-columns: 1fr; } .hdr-nav { display: none; } }
 
+/* ── Criador Inteligente — step indicator ── */
+.ci-step-ind { display:flex;flex-direction:column;align-items:center;gap:4px;flex:0 0 auto; }
+.ci-step-num { width:32px;height:32px;border-radius:50%;border:2px solid rgba(255,255,255,.15);
+               background:rgba(255,255,255,.05);color:var(--muted);font-size:13px;font-weight:700;
+               display:flex;align-items:center;justify-content:center;transition:.3s; }
+.ci-step-lbl { font-size:11px;color:var(--muted);white-space:nowrap;transition:.3s; }
+.ci-step-ind[data-active="true"] .ci-step-num { border-color:var(--gold);background:var(--goldlt);color:var(--gold); }
+.ci-step-ind[data-active="true"] .ci-step-lbl { color:var(--gold);font-weight:600; }
+.ci-step-ind[data-done="true"] .ci-step-num { border-color:#7ecfbd;background:rgba(126,207,189,.12);color:#7ecfbd; }
+.ci-step-line { flex:1;height:2px;background:rgba(255,255,255,.08);margin:0 6px;margin-bottom:16px;transition:.3s; }
+.ci-step-line[data-done="true"] { background:var(--gold); }
+
 /* ── HEADER PREVIEW ── */
 .hdr-preview { background: #fff; border-radius: 8px; padding: 14px 18px; margin-top: 20px; font-family: Arial, sans-serif; font-size: 11px; color: #222; border: 2px dashed rgba(212,168,67,0.35); }
 .hdr-preview-title { font-size: 9px; letter-spacing: 0.15em; color: var(--gold); text-transform: uppercase; margin-bottom: 8px; font-family: 'DM Sans',sans-serif; }
@@ -273,6 +285,12 @@ body { padding-bottom: env(safe-area-inset-bottom); }
   <!-- Nav (only when logged in) -->
   <nav class="hdr-nav" id="hdr-nav" style="display:none">
     <button class="hdr-nav-btn active" id="nav-btn-form" onclick="goTo('form')">✦ Nova Prova</button>
+    <button class="hdr-nav-btn" id="nav-btn-inteligente" onclick="goTo('inteligente')"
+            style="position:relative">
+      ⚡ Criador Inteligente
+      <span style="position:absolute;top:-6px;right:-6px;background:var(--gold);color:#111;
+                   font-size:9px;font-weight:800;padding:1px 5px;border-radius:8px">NOVO</span>
+    </button>
     <button class="hdr-nav-btn" id="nav-btn-history" onclick="goTo('history')">
       📁 Minhas Provas <span class="hdr-badge" id="history-badge" style="display:none">0</span>
     </button>
@@ -734,6 +752,254 @@ body { padding-bottom: env(safe-area-inset-bottom); }
   </div>
 
   <!-- ── HISTORY ────────────────────────────────────────── -->
+  <!-- ══════════════════════════════════════════════════════
+       CRIADOR INTELIGENTE — wizard 3 passos
+       ══════════════════════════════════════════════════════ -->
+  <div id="view-inteligente" style="display:none" class="anim">
+
+    <!-- Cabeçalho -->
+    <div style="margin-bottom:24px">
+      <div style="font-family:'Playfair Display',serif;font-size:26px;font-weight:700;
+                  color:var(--gold);margin-bottom:4px">⚡ Criador Inteligente</div>
+      <div style="font-size:13px;color:var(--muted);line-height:1.7">
+        Suba sua prova modelo → a IA aprende o formato → gera novas questões com base no livro da escola
+      </div>
+    </div>
+
+    <!-- Indicador de passos -->
+    <div style="display:flex;align-items:center;gap:0;margin-bottom:28px;user-select:none">
+      <div class="ci-step-ind" id="ci-ind-1" data-active="true">
+        <span class="ci-step-num">1</span>
+        <span class="ci-step-lbl">Prova Modelo</span>
+      </div>
+      <div class="ci-step-line" id="ci-line-12"></div>
+      <div class="ci-step-ind" id="ci-ind-2">
+        <span class="ci-step-num">2</span>
+        <span class="ci-step-lbl">Livro / Capítulo</span>
+      </div>
+      <div class="ci-step-line" id="ci-line-23"></div>
+      <div class="ci-step-ind" id="ci-ind-3">
+        <span class="ci-step-num">3</span>
+        <span class="ci-step-lbl">Configurar e Gerar</span>
+      </div>
+    </div>
+
+    <!-- ── PASSO 1: Prova Modelo ─────────────────────── -->
+    <div id="ci-step-1">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:4px">📄 Passo 1 — Sua Prova Modelo</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:18px;line-height:1.7">
+          Envie uma prova que você já criou (PDF ou Word). A IA vai analisar o estilo —
+          numeração, tipos de questão, espaçamentos, cabeçalho — e vai <strong style="color:var(--cream)">
+          clonar esse formato</strong> com novas questões baseadas no livro.
+        </div>
+
+        <!-- Drop zone -->
+        <input type="file" id="ci-exam-input" accept=".pdf,.docx" style="display:none"
+               onchange="handleCIExamFile(this)">
+        <div id="ci-exam-drop"
+             style="border:2px dashed rgba(212,168,67,0.35);border-radius:12px;padding:28px;
+                    text-align:center;cursor:pointer;transition:.3s;background:rgba(0,0,0,.12)"
+             onclick="document.getElementById('ci-exam-input').click()"
+             ondragover="event.preventDefault()"
+             ondrop="event.preventDefault();handleCIExamFile({files:event.dataTransfer.files})">
+          <div id="ci-exam-empty">
+            <div style="font-size:36px;margin-bottom:10px">📝</div>
+            <div style="font-size:15px;font-weight:600;color:var(--cream)">Arraste sua prova modelo aqui</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:5px">PDF ou Word (.docx)</div>
+          </div>
+          <div id="ci-exam-loaded" style="display:none;flex-direction:column;align-items:center;gap:8px">
+            <div style="font-size:32px" id="ci-exam-icon">📄</div>
+            <div id="ci-exam-name" style="font-size:13px;font-weight:600;color:var(--cream)"></div>
+            <div id="ci-exam-status" style="font-size:11px;color:var(--muted)">Analisando…</div>
+          </div>
+        </div>
+
+        <!-- Progresso -->
+        <div id="ci-exam-progress" style="display:none;margin-top:12px">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:4px" id="ci-exam-prog-lbl">Lendo…</div>
+          <div style="background:rgba(255,255,255,.08);border-radius:4px;height:4px;overflow:hidden">
+            <div id="ci-exam-prog-bar" style="background:var(--gold);height:4px;width:0%;transition:.3s"></div>
+          </div>
+        </div>
+
+        <!-- Resultado da análise -->
+        <div id="ci-exam-analysis" style="display:none;margin-top:18px;
+             background:rgba(45,106,94,0.1);border:1px solid rgba(45,106,94,0.3);
+             border-radius:10px;padding:14px 16px">
+          <div style="font-size:12px;font-weight:700;color:#7ecfbd;margin-bottom:10px">
+            ✓ Formato detectado
+          </div>
+          <div id="ci-analysis-details"
+               style="font-size:12px;color:var(--muted);line-height:2;display:grid;
+                      grid-template-columns:1fr 1fr;gap:2px 12px"></div>
+        </div>
+
+        <!-- Botão avançar -->
+        <button id="ci-btn-1" onclick="ciGoStep(2)" disabled
+                style="margin-top:20px;width:100%;padding:14px;border-radius:10px;border:none;
+                       background:var(--gold);color:#111;font-weight:700;font-size:14px;
+                       cursor:pointer;opacity:.4;transition:.3s">
+          Próximo: Selecionar o Livro →
+        </button>
+      </div>
+    </div>
+
+    <!-- ── PASSO 2: Livro + Capítulos ───────────────────── -->
+    <div id="ci-step-2" style="display:none">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:4px">📚 Passo 2 — Livro / Material de Apoio</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:18px;line-height:1.7">
+          Envie o livro ou apostila que a escola fornece. Selecione o(s) capítulo(s) cujo
+          <strong style="color:var(--cream)">conteúdo das páginas</strong> será a fonte das questões.
+        </div>
+
+        <!-- Drop zone livro -->
+        <input type="file" id="ci-book-input" accept=".pdf,.docx" style="display:none"
+               onchange="handleCIBookFile(this)">
+        <div id="ci-book-drop"
+             style="border:2px dashed rgba(212,168,67,0.25);border-radius:12px;padding:22px;
+                    text-align:center;cursor:pointer;transition:.3s;background:rgba(0,0,0,.12)"
+             onclick="document.getElementById('ci-book-input').click()"
+             ondragover="event.preventDefault()"
+             ondrop="event.preventDefault();handleCIBookFile({files:event.dataTransfer.files})">
+          <div id="ci-book-empty">
+            <div style="font-size:32px;margin-bottom:8px">📕</div>
+            <div style="font-size:14px;font-weight:600;color:var(--cream)">Arraste o livro/apostila aqui</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px">PDF ou Word (.docx)</div>
+          </div>
+          <div id="ci-book-loaded" style="display:none;flex-direction:column;align-items:center;gap:6px">
+            <div style="font-size:28px" id="ci-book-icon">📕</div>
+            <div id="ci-book-name" style="font-size:13px;font-weight:600;color:var(--cream)"></div>
+            <div id="ci-book-status" style="font-size:11px;color:var(--muted)">Processando…</div>
+          </div>
+        </div>
+
+        <!-- Progresso livro -->
+        <div id="ci-book-progress" style="display:none;margin-top:12px">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:4px" id="ci-book-prog-lbl">Lendo…</div>
+          <div style="background:rgba(255,255,255,.08);border-radius:4px;height:4px;overflow:hidden">
+            <div id="ci-book-prog-bar" style="background:var(--gold);height:4px;width:0%;transition:.3s"></div>
+          </div>
+        </div>
+
+        <!-- Seleção de capítulos -->
+        <div id="ci-chapters-section" style="display:none;margin-top:18px">
+          <div style="font-size:13px;font-weight:600;color:var(--gold);margin-bottom:8px">
+            📑 Capítulos — selecione um ou mais
+            <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:4px">
+              (p. = número de página detectado no sumário)
+            </span>
+          </div>
+          <div id="ci-chapter-chips"
+               style="display:flex;flex-wrap:wrap;gap:7px;max-height:190px;
+                      overflow-y:auto;padding-right:4px;margin-bottom:12px"></div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Ou informe manualmente:</div>
+          <input id="ci-chapter-manual" type="text"
+                 placeholder="Ex: Capítulo 3 — Fotossíntese"
+                 oninput="onCIManualChapter()"
+                 style="width:100%;box-sizing:border-box;background:rgba(0,0,0,.25);
+                        border:1px solid rgba(255,255,255,.1);border-radius:8px;
+                        color:var(--cream);padding:10px 12px;font-size:13px">
+        </div>
+
+        <!-- Imagens do livro -->
+        <div id="ci-book-images-section" style="display:none;margin-top:18px">
+          <div style="font-size:13px;font-weight:600;color:var(--gold);margin-bottom:8px">
+            🖼️ Imagens do Livro
+            <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:4px">
+              — selecione gráficos/figuras para incluir questões visuais (máx. 4)
+            </span>
+          </div>
+          <div id="ci-book-img-loading" style="display:none;font-size:12px;color:var(--muted);margin-bottom:6px">
+            ⏳ Extraindo imagens…
+          </div>
+          <div id="ci-book-img-gallery"
+               style="display:flex;flex-wrap:wrap;gap:8px;max-height:200px;overflow-y:auto"></div>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:22px">
+          <button onclick="ciGoStep(1)"
+                  style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(255,255,255,.12);
+                         background:transparent;color:var(--muted);font-size:13px;cursor:pointer">
+            ← Voltar
+          </button>
+          <button id="ci-btn-2" onclick="ciGoStep(3)" disabled
+                  style="flex:2;padding:13px;border-radius:10px;border:none;
+                         background:var(--gold);color:#111;font-weight:700;font-size:14px;
+                         cursor:pointer;opacity:.4;transition:.3s">
+            Próximo: Configurar →
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PASSO 3: Configurar + Gerar ──────────────────── -->
+    <div id="ci-step-3" style="display:none">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:4px">⚙️ Passo 3 — Configurar e Gerar</div>
+
+        <!-- Resumo do que foi configurado -->
+        <div id="ci-summary"
+             style="background:rgba(212,168,67,0.06);border:1px solid rgba(212,168,67,0.2);
+                    border-radius:10px;padding:14px 16px;margin-bottom:20px;
+                    font-size:12px;color:var(--muted);line-height:2">
+        </div>
+
+        <div class="g2" style="gap:14px;margin-bottom:16px">
+          <div>
+            <label>Disciplina *</label>
+            <input id="ci-disc" type="text" placeholder="Ex: Biologia, Geografia…"
+                   style="width:100%;box-sizing:border-box">
+          </div>
+          <div>
+            <label>Série / Ano *</label>
+            <input id="ci-serie" type="text" placeholder="Ex: 9º ano EF II"
+                   style="width:100%;box-sizing:border-box">
+          </div>
+        </div>
+
+        <div style="margin-bottom:16px">
+          <label>Número de questões</label>
+          <div class="num-row" style="margin-top:8px">
+            <button class="num-btn" onclick="ciChangeNum(-1)">−</button>
+            <span class="num-val" id="ci-num-display">10</span>
+            <button class="num-btn" onclick="ciChangeNum(1)">+</button>
+          </div>
+        </div>
+
+        <div style="margin-bottom:16px">
+          <label>Dificuldade</label>
+          <div class="chips" id="ci-chips-dif" style="margin-top:8px">
+            <div class="chip" data-val="facil" onclick="pickCIDif(this)">Fácil</div>
+            <div class="chip active" data-val="medio" onclick="pickCIDif(this)">Médio</div>
+            <div class="chip" data-val="dificil" onclick="pickCIDif(this)">Difícil</div>
+            <div class="chip" data-val="mista" onclick="pickCIDif(this)">Variada</div>
+          </div>
+        </div>
+
+        <div id="ci-form-error"
+             style="display:none;color:#e05a5a;font-size:13px;text-align:center;margin-bottom:10px">
+          Preencha disciplina e série antes de gerar.
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:8px">
+          <button onclick="ciGoStep(2)"
+                  style="flex:1;padding:13px;border-radius:10px;border:1px solid rgba(255,255,255,.12);
+                         background:transparent;color:var(--muted);font-size:13px;cursor:pointer">
+            ← Voltar
+          </button>
+          <button onclick="gerarClone()"
+                  style="flex:2;padding:14px;border-radius:10px;border:none;
+                         background:linear-gradient(135deg,#d4a843,#c49633);
+                         color:#111;font-weight:800;font-size:15px;cursor:pointer">
+            ⚡ Gerar Prova Clone
+          </button>
+        </div>
+      </div>
+    </div>
+  </div><!-- /view-inteligente -->
+
   <div id="view-history" style="display:none" class="anim">
     <div style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:var(--gold);margin-bottom:20px">
       📁 Minhas Provas
@@ -940,10 +1206,11 @@ function goTo(view) {
   showView(view);
   document.getElementById('nav-btn-form').classList.toggle('active', view === 'form');
   document.getElementById('nav-btn-history').classList.toggle('active', view === 'history');
+  document.getElementById('nav-btn-inteligente')?.classList.toggle('active', view === 'inteligente');
 }
 
 function showView(name) {
-  ['auth','form','loading','result','history'].forEach(v => {
+  ['auth','form','loading','result','history','inteligente'].forEach(v => {
     const el = document.getElementById('view-' + v);
     if (el) el.style.display = v === name ? '' : 'none';
   });
@@ -1760,6 +2027,588 @@ function toggleImageSelection(idx) {
     `${sel.size} selecionada(s) de ${state.materialImages.length} disponível(is)`;
 }
 
+// ══════════════════════════════════════════════════════════════
+// CRIADOR INTELIGENTE — estado, wizard e geração
+// ══════════════════════════════════════════════════════════════
+
+const ciState = {
+  step: 1,
+  // Prova modelo
+  examText: '',
+  examFileName: '',
+  examImages: [],
+  examSelectedImages: new Set(),
+  examAnalysis: null,        // {totalQ, mcCount, vfCount, discCount, numbering}
+  // Livro
+  bookText: '',
+  bookFileName: '',
+  bookChapters: [],
+  bookSelectedChapters: new Set(),
+  bookImages: [],
+  bookSelectedImages: new Set(),
+  bookChapterManual: '',
+  // Config
+  numQ: 10,
+  dif: 'medio',
+};
+
+// ── Navegação entre passos ────────────────────────────────────
+function ciGoStep(n) {
+  ciState.step = n;
+
+  [1, 2, 3].forEach(i => {
+    document.getElementById(`ci-step-${i}`).style.display = i === n ? '' : 'none';
+    const ind = document.getElementById(`ci-ind-${i}`);
+    ind.dataset.active = i === n ? 'true' : 'false';
+    ind.dataset.done   = i < n   ? 'true' : 'false';
+  });
+  document.getElementById('ci-line-12').dataset.done = n > 1 ? 'true' : 'false';
+  document.getElementById('ci-line-23').dataset.done = n > 2 ? 'true' : 'false';
+
+  if (n === 3) renderCISummary();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ── Passo 1: Upload e análise da prova modelo ─────────────────
+async function handleCIExamFile(input) {
+  const file = input.files ? input.files[0] : input;
+  if (!file) return;
+  const kind = file.name.endsWith('.pdf') ? 'pdf'
+             : file.name.endsWith('.docx') ? 'docx' : null;
+  if (!kind) { showToast('Envie PDF ou Word (.docx).', 'error'); return; }
+
+  document.getElementById('ci-exam-empty').style.display    = 'none';
+  document.getElementById('ci-exam-loaded').style.display   = 'flex';
+  document.getElementById('ci-exam-icon').textContent       = kind === 'pdf' ? '📄' : '📝';
+  document.getElementById('ci-exam-name').textContent       = file.name;
+  document.getElementById('ci-exam-status').textContent     = 'Analisando formato…';
+  document.getElementById('ci-exam-progress').style.display = '';
+  document.getElementById('ci-exam-analysis').style.display = 'none';
+
+  ciState.examFileName    = file.name;
+  ciState.examImages      = [];
+  ciState.examSelectedImages = new Set();
+
+  try {
+    // Extrai texto usando as funções existentes com progresso de CI
+    const bar = document.getElementById('ci-exam-prog-bar');
+    const lbl = document.getElementById('ci-exam-prog-lbl');
+    let text  = '';
+
+    if (kind === 'pdf') {
+      text = await _extractPdfTextCI(file, bar, lbl);
+    } else {
+      text = await _extractDocxTextCI(file, bar, lbl);
+    }
+
+    ciState.examText = text;
+
+    // Analisa o formato da prova
+    const analysis = analyzeExamFormat(text);
+    ciState.examAnalysis = analysis;
+
+    document.getElementById('ci-exam-status').textContent = `${analysis.totalQ} questão(ões) detectada(s)`;
+    document.getElementById('ci-exam-progress').style.display = 'none';
+
+    // Mostra resultado da análise
+    const details = document.getElementById('ci-analysis-details');
+    const difLabel = { facil:'Fácil', medio:'Médio', dificil:'Difícil', mista:'Variada' };
+    details.innerHTML = `
+      <span>📊 Total de questões:</span><strong style="color:var(--cream)">${analysis.totalQ}</strong>
+      <span>◉ Múltipla escolha:</span><strong style="color:var(--cream)">${analysis.mcCount}</strong>
+      <span>◈ Verdadeiro/Falso:</span><strong style="color:var(--cream)">${analysis.vfCount}</strong>
+      <span>✍ Discursivas:</span><strong style="color:var(--cream)">${analysis.discCount}</strong>
+      <span>🔢 Numeração:</span><strong style="color:var(--cream)">${analysis.numbering}</strong>
+      <span>📐 Alternativas:</span><strong style="color:var(--cream)">${analysis.altStyle}</strong>
+    `;
+    document.getElementById('ci-exam-analysis').style.display = '';
+
+    // Pre-popula dificuldade detectada no passo 3
+    if (analysis.totalQ > 0) {
+      ciState.numQ = Math.min(Math.max(analysis.totalQ, 5), 20);
+      document.getElementById('ci-num-display').textContent = ciState.numQ;
+    }
+
+    // Extrai imagens em background
+    if (kind === 'docx') {
+      ciState.examImages = await extractDocxImages(file);
+    }
+
+    // Habilita botão avançar
+    const btn = document.getElementById('ci-btn-1');
+    btn.disabled = false;
+    btn.style.opacity = '1';
+
+    showToast(`Formato da prova aprendido! ${analysis.totalQ} questão(ões) detectada(s).`, 'ok', 4000);
+  } catch (e) {
+    document.getElementById('ci-exam-status').textContent   = 'Erro ao processar.';
+    document.getElementById('ci-exam-progress').style.display = 'none';
+    showToast('Erro: ' + e.message, 'error', 5000);
+  }
+}
+
+// ── Análise de formato ────────────────────────────────────────
+function analyzeExamFormat(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  let totalQ = 0, mcCount = 0, vfCount = 0, discCount = 0;
+  let numbering = '1.', altStyle = 'A) B) C) D) E)';
+
+  for (const l of lines) {
+    // Detecta questões
+    if (/^\d+\.\s/.test(l))           { totalQ++; numbering = '1.'; }
+    else if (/^\d+\)\s/.test(l))      { totalQ++; numbering = '1)'; }
+    else if (/^Q\d+[\.:\s]/i.test(l)) { totalQ++; numbering = 'Q1.'; }
+    else if (/^questão\s+\d+/i.test(l)) { totalQ++; numbering = 'Questão N'; }
+
+    // Alternativas
+    if (/^[a-eA-E][\.)\s]/.test(l)) mcCount++;
+    if (/verdadeiro|falso|\(\s+\)/i.test(l)) vfCount++;
+
+    // Estilo de alternativa
+    if (/^[a-eA-E]\)/.test(l)) altStyle = 'A) B) C) D) E)';
+    else if (/^[a-eA-E]\./.test(l)) altStyle = 'A. B. C. D. E.';
+  }
+
+  // Ajusta contagens (cada questão MC tem ~5 linhas de alternativa)
+  mcCount  = Math.round(mcCount / 5);
+  discCount = Math.max(0, totalQ - mcCount - vfCount);
+
+  return { totalQ: Math.max(totalQ, 0), mcCount, vfCount, discCount, numbering, altStyle };
+}
+
+// ── Passo 2: Upload do livro ──────────────────────────────────
+async function handleCIBookFile(input) {
+  const file = input.files ? input.files[0] : input;
+  if (!file) return;
+  const kind = file.name.endsWith('.pdf') ? 'pdf'
+             : file.name.endsWith('.docx') ? 'docx' : null;
+  if (!kind) { showToast('Envie PDF ou Word (.docx).', 'error'); return; }
+
+  document.getElementById('ci-book-empty').style.display    = 'none';
+  document.getElementById('ci-book-loaded').style.display   = 'flex';
+  document.getElementById('ci-book-icon').textContent       = kind === 'pdf' ? '📕' : '📗';
+  document.getElementById('ci-book-name').textContent       = file.name;
+  document.getElementById('ci-book-status').textContent     = 'Processando…';
+  document.getElementById('ci-book-progress').style.display = '';
+  document.getElementById('ci-chapters-section').style.display    = 'none';
+  document.getElementById('ci-book-images-section').style.display = 'none';
+
+  ciState.bookFileName         = file.name;
+  ciState.bookChapters         = [];
+  ciState.bookSelectedChapters = new Set();
+  ciState.bookImages           = [];
+  ciState.bookSelectedImages   = new Set();
+  ciState.bookChapterManual    = '';
+
+  const bar = document.getElementById('ci-book-prog-bar');
+  const lbl = document.getElementById('ci-book-prog-lbl');
+
+  try {
+    let text = '';
+    if (kind === 'pdf') {
+      text = await _extractPdfTextCI(file, bar, lbl);
+    } else {
+      text = await _extractDocxTextCI(file, bar, lbl);
+    }
+    ciState.bookText = text;
+
+    const chapters = parseSumario(text);
+    ciState.bookChapters = chapters;
+
+    document.getElementById('ci-book-status').textContent =
+      `${(text.length/1000).toFixed(0)}k chars · ${chapters.length} capítulo(s) detectado(s)`;
+    document.getElementById('ci-book-progress').style.display = 'none';
+
+    renderCIChapterChips(chapters);
+    document.getElementById('ci-chapters-section').style.display = '';
+
+    // Imagens em background
+    document.getElementById('ci-book-img-loading').style.display   = '';
+    document.getElementById('ci-book-images-section').style.display = '';
+    const imgs = kind === 'pdf'
+      ? await extractPdfImages(file)
+      : await extractDocxImages(file);
+
+    ciState.bookImages = imgs;
+    document.getElementById('ci-book-img-loading').style.display = 'none';
+    renderCIImageGallery(imgs);
+
+    // Habilita avançar (mesmo sem capítulo selecionado, pode usar manual)
+    const btn = document.getElementById('ci-btn-2');
+    btn.disabled = false;
+    btn.style.opacity = '1';
+
+    showToast(`Livro carregado! ${chapters.length} capítulo(s) e ${imgs.length} imagem(ns).`, 'ok', 4000);
+  } catch (e) {
+    document.getElementById('ci-book-status').textContent       = 'Erro ao processar.';
+    document.getElementById('ci-book-progress').style.display   = 'none';
+    document.getElementById('ci-book-img-loading').style.display = 'none';
+    showToast('Erro: ' + e.message, 'error', 5000);
+  }
+}
+
+// ── Renderiza chips de capítulo do CI ─────────────────────────
+function renderCIChapterChips(chapters) {
+  const container = document.getElementById('ci-chapter-chips');
+  container.innerHTML = '';
+  if (!chapters.length) {
+    container.innerHTML = '<span style="font-size:12px;color:var(--muted)">Sumário não detectado — use o campo abaixo.</span>';
+    return;
+  }
+  chapters.forEach((ch, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+    chip.dataset.idx = idx;
+    const pg = ch.pageNum ? ` (p.${ch.pageNum})` : '';
+    const lbl = ch.title.length > 52 ? ch.title.slice(0,52)+'…' : ch.title;
+    chip.textContent = lbl + pg;
+    chip.title = ch.title + (ch.pageNum ? ` — página ${ch.pageNum}` : '');
+    chip.style.cssText = 'font-size:12px;cursor:pointer;white-space:normal;text-align:left;line-height:1.4';
+    chip.onclick = () => selectCIChapter(idx);
+    container.appendChild(chip);
+  });
+}
+
+function selectCIChapter(idx) {
+  const sel = ciState.bookSelectedChapters;
+  sel.has(idx) ? sel.delete(idx) : sel.add(idx);
+  document.querySelectorAll('#ci-chapter-chips .chip[data-idx]').forEach(c => {
+    c.classList.toggle('active', sel.has(parseInt(c.dataset.idx)));
+  });
+  // Atualiza campo manual
+  const titles = [...sel].sort((a,b)=>a-b).map(i => ciState.bookChapters[i]?.title).filter(Boolean);
+  if (titles.length) {
+    ciState.bookChapterManual = '';
+    document.getElementById('ci-chapter-manual').value = '';
+    showToast(`📖 ${titles.length} capítulo(s) selecionado(s).`, 'ok', 2000);
+  }
+}
+
+function onCIManualChapter() {
+  ciState.bookChapterManual = document.getElementById('ci-chapter-manual').value.trim();
+  ciState.bookSelectedChapters.clear();
+  document.querySelectorAll('#ci-chapter-chips .chip').forEach(c => c.classList.remove('active'));
+}
+
+// ── Galeria de imagens do livro CI ────────────────────────────
+function renderCIImageGallery(images) {
+  const gallery = document.getElementById('ci-book-img-gallery');
+  gallery.innerHTML = '';
+  if (!images.length) {
+    gallery.innerHTML = '<span style="font-size:12px;color:var(--muted)">Nenhuma imagem encontrada.</span>';
+    return;
+  }
+  images.forEach((img, idx) => {
+    const wrap  = document.createElement('div');
+    wrap.style.cssText = 'position:relative;width:88px;height:88px;border-radius:8px;overflow:hidden;cursor:pointer;border:2px solid rgba(255,255,255,.1);flex-shrink:0;transition:.2s';
+    wrap.title  = img.name;
+    const thumb = document.createElement('img');
+    thumb.src = img.src;
+    thumb.style.cssText = 'width:100%;height:100%;object-fit:cover';
+    const chk   = document.createElement('div');
+    chk.id = `ci-img-chk-${idx}`;
+    chk.style.cssText = 'position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:var(--gold);color:#111;font-size:11px;font-weight:800;display:none;align-items:center;justify-content:center';
+    chk.textContent = '✓';
+    const lbl = document.createElement('div');
+    lbl.style.cssText = 'position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);font-size:9px;color:#ccc;padding:2px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    lbl.textContent = img.name;
+    wrap.append(thumb, chk, lbl);
+    wrap.onclick = () => toggleCIImage(idx);
+    gallery.appendChild(wrap);
+  });
+}
+
+function toggleCIImage(idx) {
+  const sel = ciState.bookSelectedImages;
+  const chk = document.getElementById(`ci-img-chk-${idx}`);
+  const wraps = document.querySelectorAll('#ci-book-img-gallery > div');
+  if (sel.has(idx)) {
+    sel.delete(idx);
+    if (chk) chk.style.display = 'none';
+    if (wraps[idx]) wraps[idx].style.border = '2px solid rgba(255,255,255,.1)';
+  } else {
+    if (sel.size >= 4) { showToast('Máximo 4 imagens.','error'); return; }
+    sel.add(idx);
+    if (chk) chk.style.display = 'flex';
+    if (wraps[idx]) wraps[idx].style.border = '2px solid var(--gold)';
+  }
+}
+
+// ── Resumo no passo 3 ─────────────────────────────────────────
+function renderCISummary() {
+  const an   = ciState.examAnalysis;
+  const sel  = [...ciState.bookSelectedChapters].sort((a,b)=>a-b);
+  const chRef = ciState.bookChapterManual ||
+    (sel.length ? sel.map(i => ciState.bookChapters[i]?.title).join(' + ') : '—');
+
+  document.getElementById('ci-summary').innerHTML = `
+    <strong style="color:var(--gold);font-size:13px">Configuração atual:</strong><br>
+    📄 Prova modelo: <strong style="color:var(--cream)">${ciState.examFileName || '—'}</strong><br>
+    ${an ? `📊 Formato: ${an.totalQ}q · ${an.mcCount} MC · ${an.vfCount} V/F · ${an.discCount} disc. · numeração "${an.numbering}"<br>` : ''}
+    📚 Livro: <strong style="color:var(--cream)">${ciState.bookFileName || '—'}</strong><br>
+    📑 Capítulo(s): <strong style="color:var(--cream)">${chRef}</strong><br>
+    🖼️ Imagens selecionadas: <strong style="color:var(--cream)">${ciState.bookSelectedImages.size}</strong>
+  `;
+}
+
+// ── Controles de config ───────────────────────────────────────
+function ciChangeNum(delta) {
+  ciState.numQ = Math.min(Math.max(ciState.numQ + delta, 3), 30);
+  document.getElementById('ci-num-display').textContent = ciState.numQ;
+}
+function pickCIDif(el) {
+  document.querySelectorAll('#ci-chips-dif .chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  ciState.dif = el.dataset.val;
+}
+
+// ── Extratores internos com barra de progresso CI ─────────────
+async function _extractPdfTextCI(file, bar, lbl) {
+  const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
+  if (!pdfjsLib) throw new Error('pdf.js não carregado.');
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const ab  = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: ab }).promise;
+  let text  = '';
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page    = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    let pt = ''; let lx = null;
+    for (const item of content.items) {
+      if (lx !== null && Math.abs(item.transform[4] - lx) > 10) pt += ' ';
+      pt += item.str;
+      lx  = item.transform[4] + (item.width || 0);
+    }
+    text += `\n[P${p}]\n${pt.trim()}\n`;
+    bar.style.width = Math.round((p / pdf.numPages) * 100) + '%';
+    lbl.textContent = `Página ${p} de ${pdf.numPages}…`;
+  }
+  return text;
+}
+
+async function _extractDocxTextCI(file, bar, lbl) {
+  if (!window.JSZip) throw new Error('JSZip não carregado.');
+  const ab  = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(ab);
+  const xml = await zip.file('word/document.xml').async('string');
+  const parser = new DOMParser();
+  const doc    = parser.parseFromString(xml, 'application/xml');
+  const wNS    = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const paras  = doc.getElementsByTagNameNS(wNS, 'p');
+  const lines  = [];
+  for (const p of paras) {
+    const pStyle = p.getElementsByTagNameNS(wNS,'pStyle')[0];
+    const style  = pStyle ? (pStyle.getAttribute('w:val') || '') : '';
+    const isHdr  = /^(heading|h[ead]|[Tt][íi]tulo)/i.test(style);
+    let line = '';
+    for (const r of p.getElementsByTagNameNS(wNS,'t')) line += r.textContent;
+    if (line.trim()) lines.push(isHdr ? `[H] ${line.trim()}` : line.trim());
+  }
+  bar.style.width = '100%';
+  lbl.textContent = 'Concluído.';
+  return lines.join('\n');
+}
+
+// ── Extrai conteúdo do capítulo CI (usa mesma lógica do modo normal) ──
+function getCIChapterContent() {
+  const indices = [...ciState.bookSelectedChapters].sort((a,b)=>a-b);
+  const chapters = ciState.bookChapters;
+  const text     = ciState.bookText;
+
+  if (!chapters.length && !ciState.bookChapterManual) {
+    const sumEnd = Math.floor(text.length * 0.15);
+    return text.slice(sumEnd, sumEnd + 7000).replace(/\[P\d+\]\n?/g, '\n');
+  }
+
+  if (ciState.bookChapterManual && !indices.length) {
+    const sumEnd = Math.floor(text.length * 0.15);
+    const body   = text.slice(sumEnd);
+    const si     = body.toLowerCase().indexOf(ciState.bookChapterManual.toLowerCase().slice(0,25));
+    const snippet = si !== -1 ? body.slice(si, si + 8000) : body.slice(0, 8000);
+    return snippet.replace(/\[P\d+\]\n?/g, '\n');
+  }
+
+  const LIMIT = 8000;
+  const parts = [];
+  for (const idx of indices) {
+    const ch   = chapters[idx];
+    const next = chapters[idx + 1] ?? null;
+    let content = '';
+
+    // Estratégia 1: marcador de página
+    if (ch.pageNum) {
+      const si = text.indexOf(`[P${ch.pageNum}]`);
+      if (si !== -1) {
+        const ei = next?.pageNum ? text.indexOf(`[P${next.pageNum}]`) : text.length;
+        content  = text.slice(si, ei !== -1 ? ei : text.length);
+      }
+    }
+
+    // Estratégia 2: busca no corpo (após sumário)
+    if (!content) {
+      const sumEnd = Math.floor(text.length * 0.15);
+      const body   = text.slice(sumEnd);
+      const prefix = ch.title.slice(0,25).toLowerCase();
+      let si = body.toLowerCase().indexOf(prefix);
+      if (si === -1) {
+        const nm = ch.title.match(/\d+/);
+        if (nm) si = body.search(new RegExp(`cap[ií]tulo\\s+${nm[0]}`, 'i'));
+      }
+      if (si !== -1) {
+        let ei = body.length;
+        if (next) {
+          const np = next.title.slice(0,20).toLowerCase();
+          const ni = body.slice(si+50).toLowerCase().indexOf(np);
+          if (ni !== -1) ei = si + 50 + ni;
+        }
+        content = body.slice(si, ei);
+      } else {
+        content = body.slice(0, LIMIT);
+      }
+    }
+
+    content = content.replace(/\[P\d+\]\n?/g, '\n').trim();
+    if (content.length > LIMIT) content = content.slice(0, LIMIT) + '\n[… conteúdo continua no livro …]';
+    parts.push(`=== ${ch.title} ===\n${content}`);
+  }
+
+  return parts.join('\n\n');
+}
+
+// ── Prompt de clone ───────────────────────────────────────────
+function buildClonePrompt() {
+  const disc  = document.getElementById('ci-disc').value.trim();
+  const serie = document.getElementById('ci-serie').value.trim();
+  const an    = ciState.examAnalysis;
+  const dif   = { facil:'Fácil', medio:'Médio', dificil:'Difícil', mista:'Variada' }[ciState.dif];
+
+  const sel      = [...ciState.bookSelectedChapters].sort((a,b)=>a-b);
+  const chRef    = ciState.bookChapterManual ||
+    (sel.length ? sel.map(i=>ciState.bookChapters[i]?.title).join(' + ') : 'Material fornecido');
+  const chapText = getCIChapterContent();
+
+  const nImgs = ciState.bookSelectedImages.size;
+  const imgInstr = nImgs > 0
+    ? `\nIMAGENS DO LIVRO ANEXADAS (${nImgs}):\n` +
+      `- Analise cada imagem: leia eixos, legendas, tabelas e títulos.\n` +
+      `- Crie pelo menos ${Math.min(nImgs, 3)} questão(ões) referenciando diretamente uma imagem.\n` +
+      `- Escreva "Observe a figura/gráfico/tabela a seguir:" antes da questão visual.\n` +
+      `- No gabarito, explique o que a imagem mostra e como fundamenta a resposta.\n`
+    : '';
+
+  const formatBlock = an
+    ? `DETALHES DO FORMATO DETECTADO:
+- Total de questões no modelo: ${an.totalQ}
+- Múltipla escolha: ${an.mcCount} questões
+- Verdadeiro/Falso: ${an.vfCount} questões
+- Discursivas: ${an.discCount} questões
+- Estilo de numeração: "${an.numbering}"
+- Estilo de alternativas: "${an.altStyle}"`
+    : '';
+
+  return `Você é um professor especialista em ${disc}. Sua tarefa é criar uma NOVA prova seguindo EXATAMENTE o formato da prova modelo abaixo, com questões elaboradas EXCLUSIVAMENTE com base no conteúdo do capítulo do livro fornecido.
+
+════════════════════════════════════════════════════════
+PROVA MODELO — APRENDA O FORMATO (não copie as questões)
+════════════════════════════════════════════════════════
+${ciState.examText.slice(0, 6000)}
+${ciState.examText.length > 6000 ? '\n[… modelo abreviado …]' : ''}
+
+${formatBlock}
+
+REGRAS DE CLONAGEM DO FORMATO:
+1. Use o MESMO estilo de numeração (ex: "${an?.numbering || '1.'}")
+2. Mantenha a MESMA proporção de tipos de questão (${an ? `${an.mcCount} MC, ${an.vfCount} V/F, ${an.discCount} disc.` : 'conforme o modelo'})
+3. Clone o estilo das alternativas ("${an?.altStyle || 'A) B) C) D) E)'}") 
+4. Se o modelo tem cabeçalho com "Nome:", "Data:", "Turma:", mantenha no mesmo local
+5. Se o modelo tem seções/partes (Parte I, II...), recrie a mesma divisão
+6. NÃO copie nenhuma questão do modelo — crie questões COMPLETAMENTE NOVAS
+7. Se o modelo tem espaço para imagens/figuras, marque com "[Figura X]" no mesmo local
+
+════════════════════════════════════════════════════════
+CONTEÚDO DO LIVRO — ÚNICA FONTE DAS QUESTÕES
+Livro: "${ciState.bookFileName}"
+Capítulo(s): ${chRef}
+════════════════════════════════════════════════════════
+REGRAS ABSOLUTAS DE CONTEÚDO:
+1. As questões devem ser baseadas EXCLUSIVAMENTE no trecho do capítulo abaixo
+2. NÃO use conhecimento externo — use SOMENTE o que está escrito nas páginas do capítulo
+3. Cite textualmente termos, conceitos, dados e exemplos que aparecem no texto
+4. NÃO resuma o sumário — use o CORPO DO CAPÍTULO (as páginas reais de conteúdo)
+5. No gabarito, indique em qual parte do texto do capítulo a resposta está fundamentada
+${imgInstr}
+--- CONTEÚDO DO CAPÍTULO (páginas reais) ---
+${chapText}
+--- FIM DO CONTEÚDO ---
+
+════════════════════════════════════════════════════════
+
+ESPECIFICAÇÕES:
+- Disciplina: ${disc}
+- Série/Ano: ${serie}
+- Número de questões: ${ciState.numQ}
+- Dificuldade: ${dif}
+
+FORMATO DE SAÍDA OBRIGATÓRIO:
+1. Clone rigorosamente o estilo da prova modelo
+2. Após todas as questões, escreva: ---GABARITO---
+3. Liste gabarito comentado com referência ao trecho do livro
+
+ATENÇÃO: Qualquer questão que não estiver ancorada no conteúdo das páginas do capítulo é inválida.
+`;
+}
+
+// ── Gera o clone — preenche campos e redireciona para gerarProva()
+async function gerarClone() {
+  const disc  = document.getElementById('ci-disc').value.trim();
+  const serie = document.getElementById('ci-serie').value.trim();
+
+  if (!disc || !serie) {
+    document.getElementById('ci-form-error').style.display = '';
+    return;
+  }
+  document.getElementById('ci-form-error').style.display = 'none';
+
+  if (!ciState.examText) {
+    showToast('Carregue a prova modelo no Passo 1.', 'error'); return;
+  }
+  if (!ciState.bookText) {
+    showToast('Carregue o livro no Passo 2.', 'error'); return;
+  }
+
+  // Preenche campos do formulário principal para que save/export funcionem
+  document.getElementById('f-disc').value    = disc;
+  document.getElementById('f-serie').value   = serie;
+  document.getElementById('f-conteudo').value =
+    [...ciState.bookSelectedChapters].sort((a,b)=>a-b)
+      .map(i => ciState.bookChapters[i]?.title).join(' + ')
+    || ciState.bookChapterManual || '⚡ Criador Inteligente';
+
+  state.tipo = 'mista';
+  state.numQ = ciState.numQ;
+  state.dif  = ciState.dif;
+
+  // Imagens do livro selecionadas
+  const selectedImages = [];
+  for (const idx of ciState.bookSelectedImages) {
+    const img = ciState.bookImages[idx];
+    if (!img) continue;
+    selectedImages.push({
+      data: img.src.includes(',') ? img.src.split(',')[1] : img.src,
+      mimeType: img.mimeType || 'image/jpeg',
+    });
+    if (selectedImages.length >= 4) break;
+  }
+
+  // Sobrescreve o prompt e as imagens para gerarProva() pegar
+  state.ciMode           = true;          // flag: usa ciPromptOverride
+  state.ciPromptOverride = buildClonePrompt();
+  state.ciImages         = selectedImages;
+
+  await gerarProva(); // reutiliza todo o fluxo de streaming + save + result
+}
+
 function buildPrompt() {
   const disc = document.getElementById('f-disc').value;
   const serie = document.getElementById('f-serie').value;
@@ -1906,19 +2755,27 @@ async function gerarProva() {
 
   let accumulated = '';
 
-  // Coleta imagens selecionadas (base64 sem o prefixo data:...,)
-  const selectedImages = [];
-  if (state.materialSelectedImgs && state.materialSelectedImgs.size > 0) {
-    for (const idx of state.materialSelectedImgs) {
-      const img = state.materialImages[idx];
-      if (!img) continue;
-      const b64 = img.src.includes(',') ? img.src.split(',')[1] : img.src;
-      selectedImages.push({ data: b64, mimeType: img.mimeType || 'image/jpeg' });
-      if (selectedImages.length >= 4) break;
+  // Criador Inteligente: usa prompt e imagens do CI
+  let promptText, selectedImages = [];
+  if (state.ciMode && state.ciPromptOverride) {
+    promptText     = state.ciPromptOverride;
+    selectedImages = state.ciImages || [];
+  } else {
+    promptText = buildPrompt();
+    if (state.materialSelectedImgs && state.materialSelectedImgs.size > 0) {
+      for (const idx of state.materialSelectedImgs) {
+        const img = state.materialImages[idx];
+        if (!img) continue;
+        selectedImages.push({
+          data: img.src.includes(',') ? img.src.split(',')[1] : img.src,
+          mimeType: img.mimeType || 'image/jpeg',
+        });
+        if (selectedImages.length >= 4) break;
+      }
     }
   }
 
-  const reqBody = { prompt: buildPrompt() };
+  const reqBody = { prompt: promptText };
   if (selectedImages.length > 0) reqBody.images = selectedImages;
 
   try {
@@ -1976,8 +2833,12 @@ async function gerarProva() {
     saveProva(disc, serie, cont);
 
   } catch (e) {
-    showView('form');
+    showView(state.ciMode ? 'inteligente' : 'form');
     showToast('Erro ao gerar prova: ' + e.message, 'error');
+  } finally {
+    state.ciMode           = false;
+    state.ciPromptOverride = '';
+    state.ciImages         = [];
   }
 }
 
