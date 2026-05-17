@@ -1195,19 +1195,22 @@ function selectChapter(el, idx) {
   el.classList.add('on');
   st.selectedChapterIdx = idx;
   st.selectedPages      = new Set();
-  // Reseta galeria
-  st.extractedImages   = [];
-  st.selectedImageIdx  = new Set();
-  st.numImgQ           = Math.min(3, st.numQ);
-  st.imgRendering      = false;
-  document.getElementById('img-section').style.display = 'none';
-  document.getElementById('img-gallery').innerHTML = '';
-  document.getElementById('img-q-row').style.display = 'none';
+
+  // Reseta galeria de forma segura (null-safe)
+  st.extractedImages  = [];
+  st.selectedImageIdx = new Set();
+  st.numImgQ          = Math.min(3, st.numQ);
+  st.imgRendering     = false;
+  const _g = id => document.getElementById(id); // helper seguro
+  if (_g('img-section'))  _g('img-section').style.display  = 'none';
+  if (_g('img-gallery'))  _g('img-gallery').innerHTML      = '';
+  if (_g('img-q-row'))    _g('img-q-row').style.display    = 'none';
+  if (_g('img-sel-info')) { _g('img-sel-info').className = 'img-sel-info none'; _g('img-sel-info').textContent = 'Selecione imagens acima para usar nas questões'; }
 
   const ch   = st.bookChapters[idx];
   const next = st.bookChapters[idx + 1];
 
-  if (ch.pageNum) {
+  if (ch?.pageNum) {
     const start = ch.pageNum;
     const end   = next?.pageNum ? next.pageNum - 1 : Math.min(start + 24, st.bookTotalPages);
     const pages = [];
@@ -1216,17 +1219,22 @@ function selectChapter(el, idx) {
       st.selectedPages.add(p);
     }
     renderPageChips(pages);
-    // Inicia renderização da galeria em background
-    renderPageThumbnails(pages);
+    // Inicia galeria em background — nunca bloqueia os chips
+    renderPageThumbnails(pages).catch(() => {});
+  } else {
+    // Capítulo sem número de página → mostra aviso e chips vazios
+    const chips = _g('page-chips');
+    if (chips) chips.innerHTML =
+      '<div style="font-size:12px;color:var(--t3);padding:6px 2px">Número de página não detectado — use o campo manual acima para informar o intervalo de páginas.</div>';
+    updatePgCount();
   }
 
-  document.getElementById('step4-item').style.display = 'flex';
-  // Progress
-  document.getElementById('pp3').className = 'pstep done';
-  document.getElementById('pp3').querySelector('.pdot').textContent = '✓';
-  document.getElementById('pp4').className = 'pstep act';
+  // Garante que step 4 apareça em qualquer caso
+  if (_g('step4-item'))   _g('step4-item').style.display   = 'flex';
+  if (_g('pp3')) { _g('pp3').className = 'pstep done'; _g('pp3').querySelector('.pdot').textContent = '✓'; }
+  if (_g('pp4'))   _g('pp4').className = 'pstep act';
 
-  setTimeout(() => document.getElementById('step4-item').scrollIntoView({behavior:'smooth',block:'nearest'}), 100);
+  setTimeout(() => _g('step4-item')?.scrollIntoView({behavior:'smooth', block:'nearest'}), 100);
 }
 
 function renderPageChips(pages) {
@@ -1384,57 +1392,76 @@ async function renderPageThumbnails(pages) {
   const galleryHTML = [];
 
   for (const pageNum of pages) {
+    let imgs = [];
+    let pageSrcs = [];
+
     try {
       const pdfPage = await st.bookPdf.getPage(pageNum);
-      // Extrai texto para detectar fontes
-      const ct = await pdfPage.getTextContent();
-      const pageText = ct.items.map(i=>i.str).join(' ');
-      const pageSrcs = extractSources(pageText);
 
-      // Extrai imagens individuais
-      const imgs = await extractImagesFromPage(pdfPage, pageNum, pageText);
+      // Extrai texto (para fontes) — com fallback silencioso
+      try {
+        const ct = await pdfPage.getTextContent();
+        const pageText = ct.items.map(i => i.str).join(' ');
+        pageSrcs = extractSources(pageText);
+      } catch {}
 
-      if (imgs.length === 0) {
-        // Página sem imagens — mostra indicador de texto
-        galleryHTML.push(`
-          <div class="img-no-img">
-            📄 p.${pageNum}<br>apenas texto
-          </div>`);
-        continue;
+      // Extrai imagens individuais — com fallback para miniatura da página
+      try {
+        imgs = await extractImagesFromPage(pdfPage, pageNum, '');
+      } catch {
+        // Fallback: renderiza a página inteira como miniatura
+        try {
+          const baseVp = pdfPage.getViewport({ scale: 1.0 });
+          const thVp   = pdfPage.getViewport({ scale: Math.min(280 / baseVp.width, 1.0) });
+          const thC    = document.createElement('canvas');
+          thC.width = thVp.width; thC.height = thVp.height;
+          await pdfPage.render({ canvasContext: thC.getContext('2d'), viewport: thVp }).promise;
+          const dataUrl = thC.toDataURL('image/jpeg', 0.70);
+          imgs = [{ pageNum, dataUrl, base64: dataUrl.split(',')[1], w: thC.width, h: thC.height }];
+        } catch {}
       }
+    } catch { /* página inacessível — ignora */ }
 
-      for (const img of imgs) {
-        const idx = st.extractedImages.length;
-        const srcHint = pageSrcs[0] || '';
-        st.extractedImages.push({ ...img, idx, src: srcHint });
-        st.selectedImageIdx.add(idx); // default: selecionada
-        galleryHTML.push(`
-          <div class="img-thumb on" id="imgi-${idx}" data-idx="${idx}" onclick="togImgThumb(this)">
-            <img src="${img.dataUrl}" alt="Imagem p.${pageNum}" loading="lazy">
-            <div class="img-thumb-foot">
-              <span class="img-thumb-pg">p.${pageNum}</span>
-              <span class="img-thumb-src" title="${escHtml(srcHint)}">${srcHint ? escHtml(srcHint.slice(0,40)) : ''}</span>
-              <span class="img-thumb-chk"></span>
-            </div>
-          </div>`);
-        totalFound++;
-      }
-    } catch { /* página inacessível */ }
+    if (imgs.length === 0) {
+      galleryHTML.push(`<div class="img-no-img">📄 p.${pageNum}<br><span style="font-size:9px">só texto</span></div>`);
+      continue;
+    }
+
+    for (const img of imgs) {
+      const idx     = st.extractedImages.length;
+      const srcHint = pageSrcs[0] || '';
+      st.extractedImages.push({ ...img, idx, src: srcHint });
+      st.selectedImageIdx.add(idx); // default: selecionada
+      galleryHTML.push(`
+        <div class="img-thumb on" id="imgi-${idx}" data-idx="${idx}" onclick="togImgThumb(this)">
+          <img src="${img.dataUrl}" alt="Imagem p.${pageNum}" loading="lazy">
+          <div class="img-thumb-foot">
+            <span class="img-thumb-pg">p.${pageNum}</span>
+            <span class="img-thumb-src" title="${escHtml(srcHint)}">${srcHint ? escHtml(srcHint.slice(0, 38)) : ''}</span>
+            <span class="img-thumb-chk"></span>
+          </div>
+        </div>`);
+      totalFound++;
+    }
+    status.textContent = `Processando... ${totalFound} imagem(ns) até agora`;
   }
 
   gallery.innerHTML = galleryHTML.join('') ||
-    `<div class="img-no-img" style="grid-column:1/-1">Nenhuma imagem encontrada nas páginas selecionadas.</div>`;
+    `<div class="img-no-img" style="grid-column:1/-1">Nenhuma imagem detectada nas páginas selecionadas.</div>`;
 
   status.textContent = totalFound > 0
-    ? `${totalFound} imagem${totalFound!==1?'ns':''} detectada${totalFound!==1?'s':''} • toque para selecionar/remover`
+    ? `${totalFound} imagem${totalFound !== 1 ? 'ns' : ''} • toque para incluir/remover`
     : 'Nenhuma imagem detectada';
 
-  // Ajusta numImgQ ao máximo disponível
+  // Ajusta numImgQ ao máximo disponível e mostra stepper
   st.numImgQ = Math.min(st.numImgQ, Math.min(totalFound, st.numQ));
-  if (totalFound > 0) {
-    document.getElementById('img-q-row').style.display = 'flex';
-    document.getElementById('img-q-total').textContent = st.numQ;
-    document.getElementById('img-q-v').textContent = st.numImgQ;
+  const qRow = document.getElementById('img-q-row');
+  if (totalFound > 0 && qRow) {
+    qRow.style.display = 'flex';
+    const qv = document.getElementById('img-q-v');
+    const qt = document.getElementById('img-q-total');
+    if (qv) qv.textContent = st.numImgQ;
+    if (qt) qt.textContent = st.numQ;
   }
 
   updateImgSelInfo();
