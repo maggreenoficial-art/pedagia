@@ -337,7 +337,16 @@ textarea{resize:vertical;min-height:80px;line-height:1.55}
             </select>
           </div>
         </div>
-        <div class="saved"><div class="sdot"></div>Dados salvos automaticamente</div>
+        <div class="saved"><div class="sdot"></div>Dados salvos automaticamente no perfil</div>
+      </div>
+
+      <!-- Badge "perfil carregado" (aparece quando vem do localStorage) -->
+      <div id="cab-badge" style="display:none;margin-top:0;align-items:center;gap:7px;padding:9px 13px;background:var(--Ga);border:1px solid rgba(24,160,60,.2);border-radius:var(--rsm)">
+        <div style="font-size:15px">🏫</div>
+        <div>
+          <div id="cab-badge-name" style="font-size:13px;font-weight:800;color:var(--t1)"></div>
+          <div style="font-size:11px;color:var(--G);font-weight:700">✓ Perfil carregado — toque em "Preencher" para editar</div>
+        </div>
       </div>
 
       <div id="pnl-a">
@@ -507,12 +516,18 @@ textarea{resize:vertical;min-height:80px;line-height:1.55}
   <div class="card">
     <div class="card-body">
       <div class="sl">Questões</div>
-      <div class="format-badge" style="margin-bottom:16px">
+      <!-- Badge padrão ENEM -->
+      <div class="format-badge" style="margin-bottom:10px">
         <span class="format-badge-icon">📋</span>
         <div>
-          <div class="format-badge-t">Formato inteligente</div>
-          <div class="format-badge-s">Contextualizado · múltipla escolha a–e · V/F · discursivas · gabarito comentado</div>
+          <div class="format-badge-t">Padrão ENEM / Vestibular</div>
+          <div class="format-badge-s">Contextualizador obrigatório · alternativas a) b) c) d) e) · gabarito com fonte · frase motivacional</div>
         </div>
+      </div>
+      <!-- Distribuição recomendada (doc técnico v2) -->
+      <div id="dist-box" style="background:var(--s2);border:1px solid var(--line);border-radius:var(--rsm);padding:11px 13px;margin-bottom:16px;display:none">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:var(--Y);margin-bottom:8px">Distribuição recomendada</div>
+        <div id="dist-table" style="display:grid;grid-template-columns:1fr auto;gap:3px 12px;font-size:11px;line-height:1.7"></div>
       </div>
       <label class="fl" style="margin-bottom:8px">Dificuldade</label>
       <div class="chips" style="margin-bottom:18px">
@@ -761,6 +776,7 @@ async function init() {
   } catch(e) { showView('auth'); }
 
   loadCab();
+  updateDist();
 }
 
 function onLogin(session) {
@@ -867,6 +883,33 @@ function setDif(el) {
 function chN(d) {
   st.numQ = Math.min(30, Math.max(3, st.numQ + d));
   document.getElementById('nv').textContent = st.numQ;
+  updateDist();
+}
+
+function updateDist() {
+  const n = st.numQ;
+  if (n < 5) { document.getElementById('dist-box').style.display='none'; return; }
+  // Proporções baseadas no documento técnico
+  const t = [
+    ['Texto / trecho com fonte',    Math.max(1, Math.round(n*0.20))],
+    ['Tabela ou dado estatístico',  Math.max(1, Math.round(n*0.18))],
+    ['Gráfico ou série histórica',  Math.max(1, Math.round(n*0.18))],
+    ['Charge ou imagem descrita',   Math.max(1, Math.round(n*0.12))],
+    ['Mapa descrito',               Math.max(0, Math.round(n*0.12))],
+    ['Discursiva com fonte dupla',  Math.max(1, Math.round(n*0.12))],
+    ['Associação de colunas',       Math.max(0, Math.round(n*0.08))],
+  ];
+  // Ajusta total para bater em n
+  let sum = t.reduce((a,[,v])=>a+v, 0);
+  let diff = n - sum;
+  if (diff > 0) t[0][1] += diff;
+  else if (diff < 0) { for (let i=t.length-1;i>=0&&diff<0;i--) { if(t[i][1]>0){t[i][1]--;diff++;} } }
+
+  document.getElementById('dist-table').innerHTML =
+    t.filter(([,v])=>v>0).map(([lbl,val])=>
+      `<span style="color:var(--t2)">${lbl}</span><span style="color:var(--Y);font-weight:800;text-align:right">${val}q</span>`
+    ).join('');
+  document.getElementById('dist-box').style.display = '';
 }
 
 // ══════════════════════════════════════════════
@@ -919,6 +962,15 @@ function loadCab() {
     const c = JSON.parse(localStorage.getItem('pgcab') || '{}');
     ['escola','cidade','fone','prof'].forEach(k => { const el=document.getElementById('f-'+k); if(el&&c[k]) el.value=c[k]; });
     if (c.bimestre) { const el=document.getElementById('f-bimestre'); if(el) el.value=c.bimestre; }
+    // Mostra badge de perfil carregado se há dados
+    if (c.escola || c.prof) {
+      const badge = document.getElementById('cab-badge');
+      const bname = document.getElementById('cab-badge-name');
+      if (badge && bname) {
+        bname.textContent = [c.escola, c.prof].filter(Boolean).join(' · ');
+        badge.style.display = 'flex';
+      }
+    }
   } catch {}
 }
 
@@ -1127,67 +1179,189 @@ async function extractSelectedPages() {
 // ══════════════════════════════════════════════
 // BUILD PROMPT
 // ══════════════════════════════════════════════
+// ── Extrai imagens (renderiza páginas selecionadas) ──────────────────
+async function extractPageImages() {
+  if (!st.bookPdf || st.selectedPages.size === 0) return [];
+  const images = [];
+  // Usa no máximo 4 páginas como imagem (limite multimodal)
+  const pages = [...st.selectedPages].sort((a,b) => a-b).slice(0, 4);
+  for (const pageNum of pages) {
+    try {
+      const page = await st.bookPdf.getPage(pageNum);
+      const vp   = page.getViewport({ scale: 1.2 });
+      const canvas = document.createElement('canvas');
+      canvas.width  = vp.width;
+      canvas.height = vp.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      // Redimensiona para no máximo 900px de largura
+      const maxW  = 900;
+      const scale = Math.min(maxW / vp.width, 1);
+      const out   = document.createElement('canvas');
+      out.width   = Math.round(vp.width  * scale);
+      out.height  = Math.round(vp.height * scale);
+      out.getContext('2d').drawImage(canvas, 0, 0, out.width, out.height);
+      const b64 = out.toDataURL('image/jpeg', 0.72).split(',')[1];
+      images.push({ mimeType: 'image/jpeg', data: b64 });
+    } catch {}
+  }
+  return images;
+}
+
+// ── Prompt 4 blocos — padrão ENEM/vestibular (doc técnico v2) ────────
 async function buildPrompt() {
-  if (st.ciMode && st.ciPromptOverride) return st.ciPromptOverride;
+  // Criador Inteligente usa prompt próprio
+  if (st.ciMode && st.ciPromptOverride) return { prompt: st.ciPromptOverride, images: [] };
 
   const disc  = v('f-disc');
   const serie = v('f-serie');
   const tipo  = v('f-tipo') || 'Prova';
   const valor = v('f-valor');
+  const bim   = v('f-bimestre') || '1º Bimestre';
   const dif   = { facil:'Fácil', medio:'Médio', dificil:'Difícil', mista:'Variada' }[st.dif];
+  const cab   = getCab();
   const src   = document.getElementById('s-livro').classList.contains('on') ? 'livro' : 'desc';
 
   let contentBlock = '';
+  let pageImages   = [];
+
   if (src === 'livro') {
-    const chIdx  = st.selectedChapterIdx;
-    const manCap = v('f-cap-manual');
+    const chIdx   = st.selectedChapterIdx;
+    const manCap  = v('f-cap-manual');
     const chTitle = chIdx >= 0 ? st.bookChapters[chIdx]?.title : manCap;
-    const pages  = [...st.selectedPages].sort((a,b)=>a-b);
+    const pages   = [...st.selectedPages].sort((a,b) => a-b);
     const pagesText = await extractSelectedPages();
+    pageImages      = await extractPageImages();
 
     contentBlock = `
-════════════════════════════════════════════════════
-MATERIAL DE REFERÊNCIA — FONTE OBRIGATÓRIA DAS QUESTÕES
-Livro: "${st.bookFileName}"
+CONTEÚDO EXTRAÍDO DO MATERIAL — FONTE OBRIGATÓRIA DE TODAS AS QUESTÕES:
+Livro/Apostila: "${st.bookFileName}"
 ${chTitle ? `Capítulo: ${chTitle}` : 'Trecho selecionado'}
-Páginas: ${pages.join(', ')}
-════════════════════════════════════════════════════
-REGRAS ABSOLUTAS:
-1. Use EXCLUSIVAMENTE o conteúdo das páginas abaixo — NÃO use conhecimento externo.
-2. Extraia conceitos, termos, dados e exemplos que aparecem EXPLICITAMENTE no texto.
-3. No gabarito, cite a página onde a resposta está fundamentada.
-4. Não invente dados, nomes, datas ou exemplos que não estejam no texto.
+Páginas extraídas: ${pages.join(', ')} (${pages.length} página${pages.length !== 1 ? 's' : ''})
+${pageImages.length ? `Imagens/visuais: ${pageImages.length} página(s) renderizada(s) — use para criar questões de gráficos, charges e tabelas` : ''}
 
---- CONTEÚDO DAS PÁGINAS (${pages.length} páginas) ---
-${pagesText.slice(0, 12000)}
-${pagesText.length > 12000 ? '\n[… conteúdo abreviado …]' : ''}
---- FIM DO CONTEÚDO ---
+--- TEXTO EXTRAÍDO ---
+${pagesText.slice(0, 12000)}${pagesText.length > 12000 ? '\n[… conteúdo abreviado …]' : ''}
+--- FIM DO TEXTO ---
+
+REGRA ABSOLUTA: Use EXCLUSIVAMENTE o conteúdo acima. Não busque informações externas. Não invente fontes.
+Toda fonte nas questões deve ser: Fonte: [nome do livro], [autor], [editora, ano], p.[número da página].
 `;
   } else {
     const topicos = v('f-topicos');
-    contentBlock = `\nConteúdo / Tópicos: ${topicos}\n`;
+    contentBlock = `\nCONTEÚDO / TÓPICOS FORNECIDOS PELO PROFESSOR:\n${topicos}\n`;
   }
 
-  return `Você é um professor especialista em ${disc}. Crie uma ${tipo.toLowerCase()} escolar completa.
+  const prompt = `BLOCO 1 — INSTRUÇÃO GERAL
+Você é um elaborador especialista de provas no padrão ENEM/vestibular para escolas estaduais brasileiras.
+Sua tarefa é gerar questões EXATAMENTE no formato dos exemplos abaixo.
+NÃO gere questões com enunciado direto e seco — TODA questão de múltipla escolha precisa de contextualizador.
 
-ESPECIFICAÇÕES:
-- Disciplina: ${disc}
-- Série/Ano: ${serie}
-- Tipo: ${tipo}${valor ? ` (valor: ${valor} pontos)` : ''}
-- Dificuldade: ${dif}
-- Número de questões: ${st.numQ}
+════════════════════════════════════════════════
+BLOCO 2 — EXEMPLOS REAIS DE QUESTÕES CORRETAS
+(Padrão da Escola Estadual Rui Barbosa, Cassilândia/MS)
+════════════════════════════════════════════════
+
+EXEMPLO 1 — Dado estatístico / tabela:
+"Analise a tabela: BRASIL: NÚMERO DE CONFLITOS NO CAMPO (2019) [dado por estado — Pará lidera com 157 ocorrências]
+Fonte: CPT, Conflitos no Campo Brasil 2020, p.12.
+Com base nos dados, O que revelam sobre a distribuição dos conflitos? Quais as possíveis causas e os principais problemas decorrentes?"
+→ Discursiva — resposta mínima 10 linhas. Dado real + fonte + comando com múltiplos eixos.
+
+EXEMPLO 2 — Charge / imagem:
+"Observe a charge a seguir: [descrição da crítica à Divisão Internacional do Trabalho]
+A ilustração critica a Divisão Internacional do Trabalho. Além disso, é correto assinalar que ela retrata:
+a) a igualdade de condições entre países desenvolvidos e em desenvolvimento
+b) a inserção dos países periféricos como produtores de tecnologia de ponta
+c) a dependência tecnológica dos países ricos em relação aos periféricos
+d) a superação completa das relações coloniais na economia globalizada
+e) dois mundos distintos: produtor de matéria-prima e fornecedor de tecnologia"
+→ Origem citada + imagem descrita + comando + alternativas em MINÚSCULA.
+
+EXEMPLO 3 — Gráfico / série histórica:
+"Observe o gráfico: 'Evolução do rendimento médio mensal per capita por cor ou raça — 2012 a 2021'
+Fonte: IBGE, Síntese de Indicadores Sociais, 2022, p.51.
+Assinale a alternativa que apresenta interpretação CORRETA dos dados:
+a) A desigualdade racial de renda foi completamente eliminada no período analisado
+b) O rendimento de brancos e negros convergiu para a mesma faixa em 2021
+c) A pandemia de 2020 ampliou as desigualdades já existentes entre os grupos raciais
+d) O crescimento do rendimento negro superou o branco em todos os anos da série
+e) Não há relação estatisticamente relevante entre cor/raça e rendimento no Brasil"
+→ Título completo + fonte precisa + alternativa correta exige interpretação — distratores com erro sutil e plausível.
+
+EXEMPLO 4 — Texto-base, interpretação crítica:
+"O processo de descolonização na África e Ásia não significou apenas independência formal, mas a redefinição de relações políticas, econômicas e culturais em escala mundial.
+Fonte: [referência do material]
+Assinale a alternativa que melhor expressa uma INTERPRETAÇÃO CRÍTICA:
+a) A descolonização foi pacífica e consensual em todos os países africanos
+b) A independência formal garantiu plena soberania econômica aos ex-colonizados
+c) As antigas metrópoles perderam completamente sua influência nos territórios independentes
+d) A descolonização representou ruptura total com todas as estruturas coloniais de poder
+e) A independência política coexistiu com formas renovadas de dependência econômica e cultural"
+→ Texto-base + fonte + alternativa correta reconhece contradições — nunca simplifica.
+
+EXEMPLO 5 — Discursiva com fonte dupla:
+"[Trecho de artigo científico sobre urbanização] + [Charge descrita sobre migração campo-cidade]
+Considerando os dois pontos de vista apresentados, produza um texto de pelo menos dez linhas analisando e comparando os aspectos do quadro apresentado.
+Critérios: argumento central claro, citação das duas fontes, perspectiva crítica desenvolvida."
+→ Duas fontes + comando de produção textual + critérios explícitos de avaliação.
+
+════════════════════════════════════════════════
+BLOCO 3 — REGRAS OBRIGATÓRIAS DO FORMATO
+════════════════════════════════════════════════
+
+REGRAS ABSOLUTAS — NUNCA VIOLAR:
+1. CONTEXTUALIZADOR: OBRIGATÓRIO em TODA questão de múltipla escolha.
+   Tipos aceitos: trecho de texto, tabela, gráfico, charge descrita, mapa descrito, dado estatístico, citação.
+   Mínimo 70% das questões devem ter contextualizador com fonte.
+
+2. FONTE: EXCLUSIVAMENTE do material do professor — NUNCA inventar.
+   Com fonte impressa no material → usar exatamente como está.
+   Sem fonte impressa → usar: Fonte: [Nome do livro/apostila, Autor, Editora, Ano], p.[N].
+
+3. COMANDO: em negrito, após o contextualizador.
+   Verbos corretos: Assinale / Analise / Identifique / Considere / Com base em / De acordo com / Observe e responda.
+
+4. ALTERNATIVAS: SEMPRE letras MINÚSCULAS — a) b) c) d) e)
+   NUNCA usar A) B) C) D) E) — somente minúsculas.
+   Distratores plausíveis, nunca absurdos.
+   Tipos de distrator aceitos: inversão causa/consequência · generalização indevida (sempre/nunca/todos) · verdade parcial que omite contradição.
+
+5. ALTERNATIVA CORRETA: aquela que reconhece complexidade e contradições — nunca a mais simples nem a mais radical.
+
+6. VARIEDADE: não repetir o mesmo tipo de contextualizador.
+   Distribuição recomendada (prova de 10 questões): 2 texto, 2 tabela/dado, 2 gráfico, 1 charge, 1 mapa descrito, 1 discursiva, 1 associação de colunas.
+
+7. QUESTÕES DISCURSIVAS: sempre com fonte dupla (texto + imagem/dado). Indicar número mínimo de linhas e critérios de resposta.
+
+8. NUMERAÇÃO: 1. 2. 3. etc. (com ponto, não parêntese).
+
+9. FRASE MOTIVACIONAL: obrigatória no final da prova (antes do gabarito), em itálico entre asteriscos (*texto*).
+
+════════════════════════════════════════════════
+BLOCO 4 — INSTRUÇÃO DE GERAÇÃO COM O MATERIAL
+════════════════════════════════════════════════
+
+AGORA GERE A PROVA:
+Disciplina: ${disc}
+Série/Ano: ${serie}
+Bimestre: ${bim}
+Tipo: ${tipo}${valor ? ` — Valor: ${valor} pontos` : ''}
+Número de questões: ${st.numQ}
+Dificuldade: ${dif}
+
+DADOS DO PROFESSOR (perfil já salvo — não solicitar novamente):
+Escola: ${cab.escola || '(não informado)'}
+Cidade: ${cab.cidade || '(não informado)'}
+Professor(a): ${cab.prof || '(não informado)'}
 ${contentBlock}
-FORMATO OBRIGATÓRIO:
-1. Questões numeradas "1.", "2.", etc.
-2. Múltipla escolha: alternativas a) b) c) d) e) em linhas separadas
-3. V/F: "( ) Verdadeiro  ( ) Falso" após o enunciado
-4. Discursivas: espaço "Resposta: ___________"
-5. NÃO inclua cabeçalho
-6. Após as questões escreva exatamente: ---GABARITO---
-7. Gabarito comentado com referência à fonte (página/trecho)
-${src==='livro' ? '\n8. Cada questão deve citar "Conforme o livro..." ou mencionar o conceito presente no texto.' : ''}
+INSTRUÇÕES FINAIS:
+- NÃO inclua cabeçalho — o sistema gera automaticamente.
+- Após TODAS as questões, escreva EXATAMENTE: ---GABARITO---
+- No gabarito: indicar letra correta + justificativa de 2-3 linhas + citação da fonte e página.
+- Termine com a frase motivacional em itálico (antes do ---GABARITO---).
+${src === 'livro' ? '- Use SOMENTE o conteúdo extraído acima. Não busque informações externas.' : ''}`;
 
-${src==='livro' ? 'Baseie TODAS as questões no conteúdo das páginas fornecidas.' : 'Use contextos do cotidiano, seja criativo.'}`;
+  return { prompt, images: pageImages };
 }
 
 // ══════════════════════════════════════════════
@@ -1215,14 +1389,20 @@ async function gerarProva() {
   document.getElementById('stream-prev').innerHTML = '';
   ['tk-q','tk-words','tk-chars'].forEach(id => document.getElementById(id).textContent = '0');
 
-  const promptText = await buildPrompt();
+  const { prompt: promptText, images: promptImages } = await buildPrompt();
   let accumulated = '';
+
+  // Mostra no loading se há imagens sendo enviadas
+  if (promptImages?.length) {
+    document.getElementById('load-desc').textContent =
+      `${disc} · ${serie} · ${st.numQ} questões · ${promptImages.length} pág. visual`;
+  }
 
   try {
     const res = await fetch('/api/gerar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ prompt: promptText }),
+      body: JSON.stringify({ prompt: promptText, images: promptImages }),
     });
     if (!res.ok) { const e=await res.json().catch(()=>({})); throw new Error(e.error||`HTTP ${res.status}`); }
 
@@ -1803,30 +1983,42 @@ async function gerarClone() {
 
   const an=st.ciExamAnalysis;
   st.ciMode=true;
-  st.ciPromptOverride=`Você é especialista em ${disc}. Crie uma prova clonando EXATAMENTE o formato abaixo, com questões baseadas EXCLUSIVAMENTE no livro.
+  st.ciPromptOverride=`BLOCO 1 — INSTRUÇÃO GERAL
+Você é um elaborador especialista de provas no padrão ENEM/vestibular para escolas estaduais brasileiras.
+Sua tarefa é CLONAR O FORMATO da prova modelo abaixo e gerar questões NOVAS com base no livro fornecido.
+TODA questão de múltipla escolha precisa de contextualizador. Alternativas SEMPRE minúsculas: a) b) c) d) e)
 
-════════ PROVA MODELO — CLONE O FORMATO (não copie as questões) ════════
-${st.ciExamText.slice(0,5000)}
-${an?`\nFormato detectado: ${an.total}q · ${an.mc} MC · ${an.vf} V/F · numeração "${an.num}" · alternativas "${an.altStyle}"`:''}
+════════════════════════════════════════════════
+BLOCO 2 — PROVA MODELO (clone o formato, NÃO as questões)
+════════════════════════════════════════════════
+${st.ciExamText.slice(0,4500)}
+${an?`\nFORMATO DETECTADO: ${an.total}q total · ${an.mc} MC · ${an.vf} V/F · ${an.disc} discursivas · numeração "${an.num}" · alternativas "${an.altStyle}"`:''}
 
-REGRAS DE FORMATO:
-1. Clone o estilo de numeração ("${an?.num||'1.'}")
-2. Clone a proporção de tipos (${an?`${an.mc} MC, ${an.vf} V/F, ${an.disc} disc.`:'igual ao modelo'})
-3. Mantenha estilo de alternativas ("${an?.altStyle||'a) b)'}") 
-4. Clone seções, cabeçalho Nome/Data, espaçamentos
-5. NÃO copie questões — crie questões NOVAS sobre o conteúdo do livro
+════════════════════════════════════════════════
+BLOCO 3 — REGRAS DO CLONE
+════════════════════════════════════════════════
+1. Clone a numeração ("${an?.num||'1.'}"), espaçamentos e estrutura visual do modelo.
+2. Clone a proporção de tipos: ${an?`${an.mc} MC · ${an.vf} V/F · ${an.disc} discursivas`:'igual ao modelo'}.
+3. Alternativas: SEMPRE minúsculas a) b) c) d) e) (obrigatório — padrão ENEM).
+4. CONTEXTUALIZADOR obrigatório em toda MC (texto, dado, gráfico, charge, mapa).
+5. Fontes das questões: EXCLUSIVAMENTE do livro — NUNCA inventar.
+6. NÃO copie questões — crie questões totalmente novas sobre o conteúdo do livro.
+7. Frase motivacional em itálico ao final da prova.
 
-════════ CONTEÚDO DO LIVRO — ÚNICA FONTE ════════
-Livro: "${st.ciBookFileName}" · Capítulo(s): ${chRef}
-REGRAS: Use EXCLUSIVAMENTE o texto abaixo. No gabarito, cite a página.
-
---- CONTEÚDO ---
-${chapText.slice(0,10000)}
---- FIM ---
-
+════════════════════════════════════════════════
+BLOCO 4 — CONTEÚDO DO LIVRO (ÚNICA FONTE)
+════════════════════════════════════════════════
+Livro/Apostila: "${st.ciBookFileName}"
+Capítulo(s): ${chRef}
 Disciplina: ${disc} · Série: ${serie} · ${st.ciNumQ} questões
 
-FORMATO: questões numeradas → após todas escreva ---GABARITO--- → gabarito comentado com página do livro.`;
+--- TEXTO EXTRAÍDO DO LIVRO ---
+${chapText.slice(0,10000)}
+--- FIM DO TEXTO ---
+
+REGRA ABSOLUTA: Use SOMENTE o conteúdo acima. Não busque informações externas.
+Após todas as questões escreva EXATAMENTE: ---GABARITO---
+No gabarito: letra correta + justificativa + citação da página do livro.`;
 
   await gerarProva();
 }

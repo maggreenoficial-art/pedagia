@@ -37,7 +37,7 @@ function userClient(token) {
 // ── Express setup ─────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
