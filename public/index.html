@@ -142,18 +142,24 @@ textarea{resize:vertical;min-height:80px;line-height:1.55}
 .img-sec-lbl{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:var(--Y);margin-bottom:10px;display:flex;align-items:center;gap:10px}
 .img-sec-lbl span{font-size:11px;font-weight:600;color:var(--t3);text-transform:none;letter-spacing:0}
 .img-gallery{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+/* card de imagem individual */
 .img-thumb{border-radius:var(--rsm);border:2.5px solid var(--line);overflow:hidden;cursor:pointer;transition:all .18s;position:relative;background:var(--s3)}
 .img-thumb.on{border-color:var(--Y);box-shadow:0 0 0 1px rgba(255,210,0,.3)}
-.img-thumb img{width:100%;display:block;min-height:90px;object-fit:cover}
-.img-thumb-foot{background:rgba(0,0,0,.72);padding:5px 8px;display:flex;justify-content:space-between;align-items:center}
-.img-thumb-pg{font-size:12px;font-weight:900;color:var(--Y)}
-.img-thumb-chk{font-size:13px;transition:all .18s}
-.img-thumb.on .img-thumb-chk::before{content:'✓';color:var(--G)}
+.img-thumb img{width:100%;display:block;object-fit:contain;background:white}
+.img-thumb-foot{background:rgba(0,0,0,.75);padding:4px 8px;display:flex;justify-content:space-between;align-items:center;gap:4px}
+.img-thumb-pg{font-size:10px;font-weight:800;color:var(--Y);white-space:nowrap}
+.img-thumb-src{font-size:9px;color:rgba(255,255,255,.55);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:italic}
+.img-thumb-chk{font-size:13px;flex-shrink:0;transition:all .18s}
+.img-thumb.on .img-thumb-chk::before{content:'✓';color:var(--G);font-weight:900}
 .img-thumb:not(.on) .img-thumb-chk::before{content:'○';color:var(--t3)}
 .img-spin{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--s3);font-size:22px}
 @keyframes pulsate{0%,100%{opacity:1}50%{opacity:.4}}
 .img-spin span{animation:pulsate 1s ease infinite}
-.img-sel-info{margin-top:8px;font-size:11px;font-weight:700;padding:8px 10px;border-radius:var(--rxs)}
+/* nenhuma imagem numa página */
+.img-no-img{padding:14px 10px;text-align:center;font-size:11px;color:var(--t3);background:var(--s2);border-radius:var(--rsm);border:1px dashed var(--line)}
+/* questões com imagem row */
+.img-q-row{display:flex;align-items:center;gap:12px;padding:11px 13px;background:var(--s2);border-radius:var(--rsm);border:1px solid var(--line);margin-top:12px}
+.img-sel-info{font-size:11px;font-weight:700;padding:8px 10px;border-radius:var(--rxs);margin-top:8px}
 .img-sel-info.has{background:var(--Ga);color:#3DD86A;border:1px solid rgba(24,160,60,.2)}
 .img-sel-info.none{background:var(--s2);color:var(--t3);border:1px solid var(--line)}
 
@@ -518,15 +524,29 @@ textarea{resize:vertical;min-height:80px;line-height:1.55}
             <div class="pchips" id="page-chips" style="margin-top:8px"></div>
             <div class="pg-info" id="pg-count">0 páginas selecionadas</div>
 
-            <!-- Galeria de imagens das páginas -->
+            <!-- Galeria de imagens individuais das páginas -->
             <div id="img-section" style="display:none;margin-top:18px">
               <div class="img-sec-lbl">
-                🖼 Imagens para as questões
-                <span id="img-status">Carregando visualizações...</span>
+                🖼 Imagens detectadas
+                <span id="img-status">Extraindo imagens...</span>
               </div>
               <div id="img-gallery" class="img-gallery"></div>
-              <div id="img-sel-info" class="img-sel-info none" style="margin-top:8px">
-                Nenhuma imagem selecionada
+
+              <!-- Stepper: quantas questões usarão imagem -->
+              <div class="img-q-row" id="img-q-row" style="display:none">
+                <div style="flex:1">
+                  <div style="font-size:12px;font-weight:800;color:var(--t1);margin-bottom:2px">Questões com imagem/gráfico</div>
+                  <div style="font-size:10px;color:var(--t3)">de <span id="img-q-total">10</span> questões no total</div>
+                </div>
+                <div class="stepper" style="transform:scale(.85);transform-origin:right center">
+                  <button class="sb" onclick="chImgQ(-1)">−</button>
+                  <span class="sv" id="img-q-v">3</span>
+                  <button class="sb" onclick="chImgQ(1)">+</button>
+                </div>
+              </div>
+
+              <div id="img-sel-info" class="img-sel-info none">
+                Selecione imagens acima para usar nas questões
               </div>
             </div>
           </div>
@@ -774,10 +794,10 @@ const st = {
   // Book PDF (page-based navigation)
   bookFile: null, bookPdf: null, bookFileName: '', bookTotalPages: 0,
   bookChapters: [], selectedChapterIdx: -1, selectedPages: new Set(),
-  // Page image gallery
-  pageThumbnails: {},    // pageNum → dataURL (thumbnail para exibição)
-  pageImageHires: {},    // pageNum → base64 JPEG 800px (para a IA)
-  selectedImgPages: new Set(), // páginas cujas imagens vão para a IA
+  // Image gallery — imagens individuais extraídas das páginas
+  extractedImages: [],     // [{idx, pageNum, dataUrl, base64, w, h, src}]
+  selectedImageIdx: new Set(), // índices selecionados em extractedImages
+  numImgQ: 3,              // quantas questões terão contextualizador visual
   imgRendering: false,
   // Generation result
   provaText: '', gabText: '',
@@ -919,6 +939,12 @@ function setDif(el) {
 function chN(d) {
   st.numQ = Math.min(30, Math.max(3, st.numQ + d));
   document.getElementById('nv').textContent = st.numQ;
+  // Garante numImgQ ≤ numQ
+  st.numImgQ = Math.min(st.numImgQ, st.numQ);
+  const qv = document.getElementById('img-q-v');
+  const qt = document.getElementById('img-q-total');
+  if (qv) qv.textContent = st.numImgQ;
+  if (qt) qt.textContent = st.numQ;
   updateDist();
 }
 
@@ -1170,12 +1196,13 @@ function selectChapter(el, idx) {
   st.selectedChapterIdx = idx;
   st.selectedPages      = new Set();
   // Reseta galeria
-  st.pageThumbnails  = {};
-  st.pageImageHires  = {};
-  st.selectedImgPages = new Set();
-  st.imgRendering    = false;
+  st.extractedImages   = [];
+  st.selectedImageIdx  = new Set();
+  st.numImgQ           = Math.min(3, st.numQ);
+  st.imgRendering      = false;
   document.getElementById('img-section').style.display = 'none';
   document.getElementById('img-gallery').innerHTML = '';
+  document.getElementById('img-q-row').style.display = 'none';
 
   const ch   = st.bookChapters[idx];
   const next = st.bookChapters[idx + 1];
@@ -1212,11 +1239,15 @@ function togP(el) {
   el.classList.toggle('on');
   const on = el.classList.contains('on');
   on ? st.selectedPages.add(p) : st.selectedPages.delete(p);
-  // Sincroniza galeria: remover da seleção de imagens se a página foi desmarcada
+  // Sincroniza galeria: deseleciona imagens da página se ela for desmarcada
   if (!on) {
-    st.selectedImgPages.delete(p);
-    const imgEl = document.getElementById(`imgt-${p}`);
-    if (imgEl) imgEl.classList.remove('on');
+    st.extractedImages.forEach((img, idx) => {
+      if (img.pageNum === p) {
+        st.selectedImageIdx.delete(idx);
+        const el = document.getElementById(`imgi-${idx}`);
+        if (el) el.classList.remove('on');
+      }
+    });
     updateImgSelInfo();
   }
   updatePgCount();
@@ -1256,122 +1287,197 @@ async function extractSelectedPages() {
 // ══════════════════════════════════════════════
 // BUILD PROMPT
 // ══════════════════════════════════════════════
-// ── Galeria de imagens das páginas ──────────────────────────────────
+// ══ EXTRAÇÃO DE IMAGENS INDIVIDUAIS DO PDF ══════════════════════════
+
+// Multiplica duas matrizes de transformação [a,b,c,d,e,f]
+function matMul(m1, m2) {
+  const [a,b,c,d,e,f] = m1, [g,h,i,j,k,l] = m2;
+  return [a*g+c*h, b*g+d*h, a*i+c*j, b*i+d*j, a*k+c*l+e, b*k+d*l+f];
+}
+
+// Extrai fontes "Fonte: ..." do texto da página
+function extractSources(text) {
+  const found = [];
+  // Captura "Fonte:" seguido de 1-3 linhas
+  const re = /[Ff]onte:\s*([^\n]{8,}(?:\n(?![A-ZÁÊÍÓÚÀÃÇ\d])[^\n]{4,}){0,3})/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const s = m[1].replace(/\s+/g,' ').trim();
+    if (s.length > 15 && s.length < 350 && !found.includes(s)) found.push(s);
+  }
+  return found;
+}
+
+// Extrai imagens individuais de uma página usando rastreamento CTM
+async function extractImagesFromPage(pdfPage, pageNum, pageText) {
+  const SCALE = 2.2; // alta resolução para recorte preciso
+  const baseVp  = pdfPage.getViewport({ scale: 1.0 });
+  const viewport = pdfPage.getViewport({ scale: SCALE });
+  const pageH   = baseVp.height; // altura em unidades PDF
+
+  // Renderiza página inteira
+  const fullC = document.createElement('canvas');
+  fullC.width  = viewport.width;
+  fullC.height = viewport.height;
+  await pdfPage.render({ canvasContext: fullC.getContext('2d'), viewport }).promise;
+
+  // Obtém lista de operadores
+  const opList = await pdfPage.getOperatorList();
+  const { fnArray, argsArray } = opList;
+
+  const ctmStack = [];
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const cropped = [];
+  const MIN_PX = 90; // pixels mínimos para considerar como imagem relevante
+
+  for (let i = 0; i < fnArray.length; i++) {
+    const fn = fnArray[i], args = argsArray[i];
+    if      (fn === 15) { ctmStack.push([...ctm]); }               // save (q)
+    else if (fn === 16) { ctm = ctmStack.pop() || [1,0,0,1,0,0]; } // restore (Q)
+    else if (fn === 12) { ctm = matMul(ctm, args); }               // transform (cm)
+    else if (fn === 82 || fn === 85) {                              // paintJpeg/ImageXObject
+      // Imagem é desenhada como quadrado 1×1 transformado pelo CTM
+      const [a,b,c,d,e,f] = ctm;
+      const pts = [[e,f],[a+e,b+f],[c+e,d+f],[a+c+e,b+d+f]];
+      const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]);
+      const pdfX0 = Math.min(...xs), pdfX1 = Math.max(...xs);
+      const pdfY0 = Math.min(...ys), pdfY1 = Math.max(...ys);
+      // Coordenadas PDF (origem baixo-esquerda) → canvas (origem cima-esquerda)
+      const cx = Math.round(pdfX0 * SCALE);
+      const cy = Math.round((pageH - pdfY1) * SCALE);
+      const cw = Math.round((pdfX1 - pdfX0) * SCALE);
+      const ch = Math.round((pdfY1 - pdfY0) * SCALE);
+      // Filtra imagens muito pequenas, muito estreitas ou fora da página
+      const aspect = cw / ch;
+      if (cw < MIN_PX || ch < MIN_PX || aspect > 12 || aspect < 0.1) continue;
+      if (cx < 0 || cy < 0 || cx+cw > fullC.width || cy+ch > fullC.height) continue;
+      // Recorta
+      const crop = document.createElement('canvas');
+      crop.width = cw; crop.height = ch;
+      crop.getContext('2d').drawImage(fullC, cx, cy, cw, ch, 0, 0, cw, ch);
+      const dataUrl = crop.toDataURL('image/jpeg', 0.82);
+      const base64  = dataUrl.split(',')[1];
+      cropped.push({ pageNum, dataUrl, base64, w: cw, h: ch });
+    }
+  }
+  return cropped;
+}
+
+// ── Galeria: renderiza páginas e extrai imagens individuais ──────────
 async function renderPageThumbnails(pages) {
   if (!st.bookPdf || pages.length === 0) return;
-  if (st.imgRendering) return; // evita renderização dupla
-
+  if (st.imgRendering) return;
   st.imgRendering = true;
-  st.pageThumbnails  = {};
-  st.pageImageHires  = {};
-  st.selectedImgPages = new Set(pages); // default: todas selecionadas
+
+  st.extractedImages   = [];
+  st.selectedImageIdx  = new Set();
 
   const gallery = document.getElementById('img-gallery');
   const imgSec  = document.getElementById('img-section');
   const status  = document.getElementById('img-status');
 
-  // Mostra seção e cria placeholders
   imgSec.style.display = '';
-  gallery.innerHTML = pages.map(p => `
-    <div class="img-thumb on" id="imgt-${p}" data-pg="${p}" onclick="togImgPage(this)">
-      <div class="img-spin"><span>⏳</span></div>
-      <div class="img-thumb-foot">
-        <span class="img-thumb-pg">p.${p}</span>
-        <span class="img-thumb-chk"></span>
-      </div>
-    </div>`).join('');
+  gallery.innerHTML = `<div class="img-spin" style="grid-column:1/-1;height:80px"><span>⏳</span></div>`;
+  status.textContent = `Analisando ${pages.length} páginas...`;
 
-  updateImgSelInfo();
-  status.textContent = `Renderizando 0/${pages.length}...`;
+  let totalFound = 0;
+  const galleryHTML = [];
 
-  let done = 0;
   for (const pageNum of pages) {
     try {
-      const page = await st.bookPdf.getPage(pageNum);
-      const baseVp = page.getViewport({ scale: 1.0 });
+      const pdfPage = await st.bookPdf.getPage(pageNum);
+      // Extrai texto para detectar fontes
+      const ct = await pdfPage.getTextContent();
+      const pageText = ct.items.map(i=>i.str).join(' ');
+      const pageSrcs = extractSources(pageText);
 
-      // High-res para a IA (máx 850px largura)
-      const hiScale = Math.min(850 / baseVp.width, 1.4);
-      const hiVp    = page.getViewport({ scale: hiScale });
-      const hiC     = document.createElement('canvas');
-      hiC.width = hiVp.width; hiC.height = hiVp.height;
-      await page.render({ canvasContext: hiC.getContext('2d'), viewport: hiVp }).promise;
-      st.pageImageHires[pageNum] = hiC.toDataURL('image/jpeg', 0.74).split(',')[1];
+      // Extrai imagens individuais
+      const imgs = await extractImagesFromPage(pdfPage, pageNum, pageText);
 
-      // Thumbnail para exibição (~260px)
-      const thScale = Math.min(260 / baseVp.width, 1.0);
-      const thVp    = page.getViewport({ scale: thScale });
-      const thC     = document.createElement('canvas');
-      thC.width = thVp.width; thC.height = thVp.height;
-      await page.render({ canvasContext: thC.getContext('2d'), viewport: thVp }).promise;
-      st.pageThumbnails[pageNum] = thC.toDataURL('image/jpeg', 0.68);
-
-      // Atualiza card na galeria
-      const el = document.getElementById(`imgt-${pageNum}`);
-      if (el) {
-        el.querySelector('.img-spin')?.remove();
-        el.insertAdjacentHTML('afterbegin',
-          `<img src="${st.pageThumbnails[pageNum]}" alt="Página ${pageNum}" loading="lazy">`);
+      if (imgs.length === 0) {
+        // Página sem imagens — mostra indicador de texto
+        galleryHTML.push(`
+          <div class="img-no-img">
+            📄 p.${pageNum}<br>apenas texto
+          </div>`);
+        continue;
       }
 
-      done++;
-      status.textContent = `${done}/${pages.length} páginas renderizadas`;
-    } catch { done++; }
+      for (const img of imgs) {
+        const idx = st.extractedImages.length;
+        const srcHint = pageSrcs[0] || '';
+        st.extractedImages.push({ ...img, idx, src: srcHint });
+        st.selectedImageIdx.add(idx); // default: selecionada
+        galleryHTML.push(`
+          <div class="img-thumb on" id="imgi-${idx}" data-idx="${idx}" onclick="togImgThumb(this)">
+            <img src="${img.dataUrl}" alt="Imagem p.${pageNum}" loading="lazy">
+            <div class="img-thumb-foot">
+              <span class="img-thumb-pg">p.${pageNum}</span>
+              <span class="img-thumb-src" title="${escHtml(srcHint)}">${srcHint ? escHtml(srcHint.slice(0,40)) : ''}</span>
+              <span class="img-thumb-chk"></span>
+            </div>
+          </div>`);
+        totalFound++;
+      }
+    } catch { /* página inacessível */ }
   }
 
-  status.textContent = `${done} página${done!==1?'s':''} • toque para incluir/remover da prova`;
+  gallery.innerHTML = galleryHTML.join('') ||
+    `<div class="img-no-img" style="grid-column:1/-1">Nenhuma imagem encontrada nas páginas selecionadas.</div>`;
+
+  status.textContent = totalFound > 0
+    ? `${totalFound} imagem${totalFound!==1?'ns':''} detectada${totalFound!==1?'s':''} • toque para selecionar/remover`
+    : 'Nenhuma imagem detectada';
+
+  // Ajusta numImgQ ao máximo disponível
+  st.numImgQ = Math.min(st.numImgQ, Math.min(totalFound, st.numQ));
+  if (totalFound > 0) {
+    document.getElementById('img-q-row').style.display = 'flex';
+    document.getElementById('img-q-total').textContent = st.numQ;
+    document.getElementById('img-q-v').textContent = st.numImgQ;
+  }
+
   updateImgSelInfo();
   st.imgRendering = false;
-
-  // Anima scroll para a galeria
   setTimeout(() => imgSec.scrollIntoView({ behavior:'smooth', block:'nearest' }), 120);
 }
 
-function togImgPage(el) {
-  const p = parseInt(el.dataset.pg);
+function togImgThumb(el) {
+  const idx = parseInt(el.dataset.idx);
   el.classList.toggle('on');
-  el.classList.contains('on') ? st.selectedImgPages.add(p) : st.selectedImgPages.delete(p);
+  el.classList.contains('on') ? st.selectedImageIdx.add(idx) : st.selectedImageIdx.delete(idx);
   updateImgSelInfo();
 }
 
 function updateImgSelInfo() {
-  const n   = st.selectedImgPages.size;
+  const n   = st.selectedImageIdx.size;
   const inf = document.getElementById('img-sel-info');
   if (!inf) return;
   if (n > 0) {
     inf.className = 'img-sel-info has';
-    inf.textContent = `✓ ${n} página${n!==1?'s':''} com imagens → a IA usará como base para gráficos, tabelas e charges`;
+    const cap = Math.min(n, 4); // modelo aceita até 4 imagens
+    inf.textContent = `✓ ${n} imagem${n!==1?'ns':''} selecionada${n!==1?'s':''} — a IA receberá ${cap === n ? 'todas' : 'as ' + cap + ' primeiras'} para gerar gráficos, tabelas e charges`;
   } else {
     inf.className = 'img-sel-info none';
-    inf.textContent = '○ Nenhuma imagem selecionada — prova somente com texto';
+    inf.textContent = '○ Nenhuma imagem selecionada — prova somente com contexto textual';
   }
 }
 
-// ── Extrai imagens (usa cache da galeria ou renderiza on-demand) ──────
-async function extractPageImages() {
-  const imgPages = st.selectedImgPages.size > 0 ? st.selectedImgPages : st.selectedPages;
-  if (!st.bookPdf || imgPages.size === 0) return [];
+function chImgQ(d) {
+  const max = Math.min(st.numQ, st.extractedImages.length > 0 ? st.extractedImages.length : st.numQ);
+  st.numImgQ = Math.max(0, Math.min(max, st.numImgQ + d));
+  document.getElementById('img-q-v').textContent = st.numImgQ;
+  document.getElementById('img-q-total').textContent = st.numQ;
+}
 
-  const images = [];
-  // Máx 4 imagens (limite multimodal do modelo)
-  const pages = [...imgPages].sort((a,b) => a-b).slice(0, 4);
-
-  for (const pageNum of pages) {
-    // Usa cache se disponível (da galeria), senão renderiza
-    if (st.pageImageHires[pageNum]) {
-      images.push({ mimeType: 'image/jpeg', data: st.pageImageHires[pageNum] });
-      continue;
-    }
-    try {
-      const page = await st.bookPdf.getPage(pageNum);
-      const vp   = page.getViewport({ scale: Math.min(850 / page.getViewport({scale:1}).width, 1.4) });
-      const c    = document.createElement('canvas');
-      c.width = vp.width; c.height = vp.height;
-      await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
-      images.push({ mimeType: 'image/jpeg', data: c.toDataURL('image/jpeg', 0.74).split(',')[1] });
-    } catch {}
-  }
-  return images;
+// ── Retorna imagens selecionadas para envio multimodal ────────────────
+function extractPageImages() {
+  if (st.selectedImageIdx.size === 0) return [];
+  return [...st.selectedImageIdx]
+    .slice(0, 4) // máx 4 (limitação multimodal do modelo)
+    .map(idx => st.extractedImages[idx])
+    .filter(Boolean)
+    .map(img => ({ mimeType: 'image/jpeg', data: img.base64 }));
 }
 
 // ── Prompt 4 blocos — padrão ENEM/vestibular (doc técnico v2) ────────
@@ -1397,21 +1503,35 @@ async function buildPrompt() {
     const chTitle = chIdx >= 0 ? st.bookChapters[chIdx]?.title : manCap;
     const pages   = [...st.selectedPages].sort((a,b) => a-b);
     const pagesText = await extractSelectedPages();
-    pageImages      = await extractPageImages();
+    pageImages      = extractPageImages(); // síncrono — usa cache da galeria
+
+    // Extrai fontes citadas no próprio texto do livro
+    const bookSources = extractSources(pagesText);
+    const sourceBlock = bookSources.length
+      ? `\nFONTES ORIGINAIS DO MATERIAL (cite EXATAMENTE assim — NUNCA use o nome do arquivo):\n${bookSources.map(s=>'• '+s).join('\n')}\n`
+      : '';
+
+    // Controle de questões com imagem
+    const imgQ     = st.numImgQ;
+    const totalImg = st.selectedImageIdx.size;
+    const imgBlock = (pageImages.length > 0 && imgQ > 0)
+      ? `\nIMAGENS ENVIADAS: ${pageImages.length} imagem(ns) original(is) do livro.\nQUESTÕES COM IMAGEM: gere EXATAMENTE ${imgQ} questão(ões) com contextualizador visual (descreva/analise a imagem enviada — mapa, gráfico, charge, tabela). As demais ${st.numQ - imgQ} questão(ões) usam contextualizador textual.`
+      : '\nNENHUMA IMAGEM: gere todas as questões com contextualizador textual (trechos, dados, citações do material).';
 
     contentBlock = `
-CONTEÚDO EXTRAÍDO DO MATERIAL — FONTE OBRIGATÓRIA DE TODAS AS QUESTÕES:
+CONTEÚDO EXTRAÍDO DO MATERIAL — ÚNICA FONTE PERMITIDA:
 Livro/Apostila: "${st.bookFileName}"
 ${chTitle ? `Capítulo: ${chTitle}` : 'Trecho selecionado'}
-Páginas extraídas: ${pages.join(', ')} (${pages.length} página${pages.length !== 1 ? 's' : ''})
-${pageImages.length ? `Imagens/visuais: ${pageImages.length} página(s) renderizada(s) — use para criar questões de gráficos, charges e tabelas` : ''}
-
---- TEXTO EXTRAÍDO ---
-${pagesText.slice(0, 12000)}${pagesText.length > 12000 ? '\n[… conteúdo abreviado …]' : ''}
+Páginas: ${pages.join(', ')} (${pages.length} pág.)
+${imgBlock}
+${sourceBlock}
+--- TEXTO EXTRAÍDO DAS PÁGINAS ---
+${pagesText.slice(0, 12000)}${pagesText.length > 12000 ? '\n[… texto abreviado …]' : ''}
 --- FIM DO TEXTO ---
 
-REGRA ABSOLUTA: Use EXCLUSIVAMENTE o conteúdo acima. Não busque informações externas. Não invente fontes.
-Toda fonte nas questões deve ser: Fonte: [nome do livro], [autor], [editora, ano], p.[número da página].
+REGRA ABSOLUTA: Use EXCLUSIVAMENTE o conteúdo acima.
+Fontes: cite as "FONTES ORIGINAIS DO MATERIAL" listadas acima — NUNCA invente fonte, NUNCA use o nome do arquivo.
+Se não houver fonte listada, use: Fonte: [título da obra, autor, editora, ano, p.XX].
 `;
   } else {
     const topicos = v('f-topicos');
@@ -1562,7 +1682,7 @@ async function gerarProva() {
   // Mostra no loading se há imagens sendo enviadas
   if (promptImages?.length) {
     document.getElementById('load-desc').textContent =
-      `${disc} · ${serie} · ${st.numQ} questões · ${promptImages.length} pág. visual`;
+      `${disc} · ${serie} · ${st.numQ}q · ${promptImages.length} imagem${promptImages.length!==1?'ns':''} · ${st.numImgQ}q c/ visual`;
   }
 
   try {
