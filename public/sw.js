@@ -1,81 +1,75 @@
-// ── Gerador de Provas PWA — Service Worker ──────────────────
-const CACHE   = 'provas-ia-v3';   // bump para forçar atualização
-const APP_URL = '/';
+// ── PedagIA PWA — Service Worker (Next.js) ─────────────────
+const CACHE = 'pedagia-v18';
+const CDN_CACHE = 'pedagia-cdn-v4';
 
-// Assets to pre-cache on install
 const PRECACHE = [
   '/',
-  '/index.html',
+  '/pedagia-cloud.js',
   '/manifest.json',
   '/icons/icon.svg',
 ];
 
-// External CDN libs to cache on first fetch
-const CDN_CACHE = 'provas-ia-cdn-v3';
 const CDN_HOSTS = [
   'cdnjs.cloudflare.com',
   'cdn.jsdelivr.net',
   'unpkg.com',
-  'mozilla.github.io',
   'fonts.googleapis.com',
   'fonts.gstatic.com',
 ];
 
-// Hosts que NUNCA devem ser interceptados pelo SW
-// (re-fetch cross-origin pelo SW causa ERR_FAILED em alguns browsers)
 const PASSTHROUGH_HOSTS = [
   'supabase.co',
   'supabase.io',
   'openrouter.ai',
 ];
 
-// ── Install: pre-cache app shell ─────────────────────────────
+function isCacheableRequest(request) {
+  return request.method === 'GET';
+}
+
+function shouldSkipFetch(request) {
+  const url = new URL(request.url);
+  if (PASSTHROUGH_HOSTS.some(h => url.hostname.includes(h))) return true;
+  if (url.pathname.startsWith('/api/')) return true;
+  if (url.pathname.startsWith('/_next/')) return true;
+  if (url.search.includes('_rsc=')) return true;
+  return false;
+}
+
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE)
-      .then(cache => cache.addAll(PRECACHE))
+      .then(cache => cache.addAll(PRECACHE).catch(() => {}))
       .then(() => self.skipWaiting())
   );
 });
 
-// ── Activate: delete old caches ──────────────────────────────
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(
-        keys
-          .filter(k => k !== CACHE && k !== CDN_CACHE)
-          .map(k => caches.delete(k))
-      )
-    ).then(() => self.clients.claim())
+    caches.keys()
+      .then(keys => Promise.all(
+        keys.filter(k => k !== CACHE && k !== CDN_CACHE).map(k => caches.delete(k))
+      ))
+      .then(() => self.clients.claim())
   );
 });
 
-// ── Fetch strategy ────────────────────────────────────────────
 self.addEventListener('fetch', event => {
   const { request } = event;
+  if (!isCacheableRequest(request)) return;
+
   const url = new URL(request.url);
+  if (shouldSkipFetch(request)) return;
 
-  // 1. Hosts externos críticos (Supabase, OpenRouter) → NÃO interceptar.
-  //    Deixar o browser resolver diretamente evita ERR_FAILED em re-fetch cross-origin.
-  if (PASSTHROUGH_HOSTS.some(h => url.hostname.includes(h))) {
-    return; // sem event.respondWith → browser resolve nativamente
-  }
-
-  // 2. Chamadas à nossa API → sempre rede, nunca cache
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(fetch(request));
-    return;
-  }
-
-  // 3. CDN assets → cache-first (serve fast, cache on first load)
   if (CDN_HOSTS.some(h => url.hostname.includes(h))) {
     event.respondWith(
       caches.open(CDN_CACHE).then(cache =>
         cache.match(request).then(cached => {
           if (cached) return cached;
           return fetch(request).then(response => {
-            if (response.ok) cache.put(request, response.clone());
+            if (response.ok && isCacheableRequest(request)) {
+              cache.put(request, response.clone());
+            }
             return response;
           });
         })
@@ -84,21 +78,26 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // 4. App shell → network-first, fallback to cache
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request).catch(() => caches.match('/') || caches.match(request))
+    );
+    return;
+  }
+
   event.respondWith(
     fetch(request)
       .then(response => {
-        if (response.ok) {
+        if (response.ok && isCacheableRequest(request)) {
           const clone = response.clone();
           caches.open(CACHE).then(cache => cache.put(request, clone));
         }
         return response;
       })
-      .catch(() => caches.match(request).then(cached => cached || caches.match('/')))
+      .catch(() => caches.match(request))
   );
 });
 
-// ── Push notification placeholder (future use) ───────────────
 self.addEventListener('message', event => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
 });

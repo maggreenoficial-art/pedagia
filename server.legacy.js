@@ -135,6 +135,152 @@ ${text.slice(0, 5000)}`;
   }
 });
 
+function parseSuggestQuestionJson(raw, imageId) {
+  const strip = String(raw || '').trim();
+  const jsonMatch = strip.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  try {
+    const o = JSON.parse(jsonMatch[0]);
+    const letters = ['a', 'b', 'c', 'd', 'e'];
+    let alts = o.alternatives;
+    if (!Array.isArray(alts) || alts.length < 5) {
+      alts = letters.map(letter => {
+        const found = (o.alternatives || []).find(a =>
+          String(a.letter || a.letra || '').toLowerCase() === letter
+        );
+        return { letter, text: String(found?.text || found?.texto || '').trim() };
+      });
+    } else {
+      alts = alts.slice(0, 5).map((a, i) => ({
+        letter: String(a.letter || a.letra || letters[i]).toLowerCase(),
+        text:   String(a.text || a.texto || '').trim(),
+      }));
+    }
+    const correct = String(o.correctAnswer || o.gabarito || o.resposta || 'a').toLowerCase().replace(/[^a-e]/g, '') || 'a';
+    const statement = String(o.statement || o.enunciado || o.questao || '').trim();
+    if (!statement) return null;
+    return {
+      imageId: String(o.imageId || imageId),
+      statement,
+      alternatives: alts,
+      correctAnswer: letters.includes(correct) ? correct : 'a',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseSuggestQuestionText(raw, imageId) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const gabM = text.match(/\[Gabarito:\s*([a-e])\s*\]/i);
+  const correctAnswer = (gabM?.[1] || 'a').toLowerCase();
+  const body = text.replace(/\[Gabarito:[^\]]+\]/gi, '').trim();
+  const lines = body.split('\n').map(l => l.trim()).filter(Boolean);
+  const alternatives = [];
+  let statementLines = [];
+  for (const line of lines) {
+    const am = line.match(/^([a-e])\)\s*(.+)/i);
+    if (am) alternatives.push({ letter: am[1].toLowerCase(), text: am[2].trim() });
+    else statementLines.push(line.replace(/\*\*/g, ''));
+  }
+  const statement = statementLines.join(' ').trim();
+  if (!statement || alternatives.length < 5) return null;
+  return { imageId, statement, alternatives: alternatives.slice(0, 5), correctAnswer };
+}
+
+// ── POST /api/sugerir-questao — IA sugere 1 questão para uma imagem (por imageId) ─
+app.post('/api/sugerir-questao', auth, async (req, res) => {
+  const { imageId, imageBase64, srcHint, disc, serie, caption, pageNumber } = req.body;
+  if (!imageId) return res.status(400).json({ error: 'imageId não fornecido.' });
+  if (!imageBase64) return res.status(400).json({ error: 'Imagem não fornecida.' });
+
+  const disciplina = disc || 'disciplina';
+  const serie_     = serie || 'ensino médio';
+  const fonteInfo  = srcHint || caption
+    ? `Fonte visível na imagem: "${srcHint || caption}". Use EXATAMENTE essa fonte no enunciado, se aplicável.`
+    : 'Sem fonte visível — NÃO invente fonte.';
+
+  const prompt = `Você é um elaborador de provas para escola estadual brasileira.
+Analise a imagem (página ${pageNumber || '?'}) e crie UMA questão de múltipla escolha para ${disciplina} — ${serie_}.
+
+${fonteInfo}
+
+REGRAS OBRIGATÓRIAS:
+- Responda APENAS com JSON válido (sem markdown, sem texto antes ou depois).
+- O campo "imageId" DEVE ser exatamente: "${imageId}"
+- O "statement" descreve o contextualizador + comando; NUNCA use [IMAGEM], [Imagem 1] ou placeholder de imagem.
+- Exatamente 5 alternativas com letras a, b, c, d, e em minúsculas.
+- "correctAnswer" é uma letra de a a e.
+
+Formato:
+{
+  "imageId": "${imageId}",
+  "statement": "texto do enunciado completo em texto simples",
+  "alternatives": [
+    {"letter":"a","text":"..."},
+    {"letter":"b","text":"..."},
+    {"letter":"c","text":"..."},
+    {"letter":"d","text":"..."},
+    {"letter":"e","text":"..."}
+  ],
+  "correctAnswer": "c"
+}`;
+
+  try {
+    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization:  `Bearer ${OR_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${PORT}`,
+        'X-Title': 'Gerador de Provas com IA',
+      },
+      body: JSON.stringify({
+        model:      OR_MODEL,
+        stream:     false,
+        max_tokens: 700,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
+          ],
+        }],
+      }),
+    });
+
+    if (!resp.ok) {
+      const t = await resp.text();
+      return res.status(502).json({ error: `OpenRouter: ${t.slice(0,200)}` });
+    }
+    const data    = await resp.json();
+    const raw     = data.choices?.[0]?.message?.content?.trim() || '';
+    let parsed    = parseSuggestQuestionJson(raw, imageId) || parseSuggestQuestionText(raw, imageId);
+    if (!parsed) {
+      return res.status(502).json({ error: 'Não foi possível interpretar a questão gerada pela IA.' });
+    }
+    if (parsed.imageId !== imageId) {
+      return res.status(500).json({ error: 'A IA retornou uma questão para outra imagem.' });
+    }
+    if (/\[\s*imagem|imagem\s*\d+/i.test(parsed.statement)) {
+      return res.status(400).json({ error: 'Enunciado contém placeholder de imagem — regenere a sugestão.' });
+    }
+    return res.json({
+      imageId,
+      question: {
+        statement:      parsed.statement,
+        alternatives:   parsed.alternatives,
+        correctAnswer:  parsed.correctAnswer,
+      },
+      questao: parsed.statement, // compat. visualização legada
+    });
+  } catch (err) {
+    console.error('Erro /api/sugerir-questao:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /api/gerar — OpenRouter streaming via SSE (suporta multimodal) ──────
 app.post('/api/gerar', auth, async (req, res) => {
   const { prompt, images } = req.body;
@@ -247,23 +393,69 @@ app.get('/api/provas/:id', auth, async (req, res) => {
   res.json(data);
 });
 
+// Monta registro compatível com tabelas antigas (sem coluna cabecalho JSONB)
+function buildProvaRow(userId, body) {
+  const { disciplina, serie, conteudo, tipo, dificuldade,
+          num_questoes, prova_text, gabarito_text, escola, professor,
+          cabecalho, builder_snapshot } = body;
+
+  const row = {
+    user_id: userId,
+    disciplina: String(disciplina || '').trim() || 'Sem disciplina',
+    serie: String(serie || '').trim() || '—',
+    conteudo: String(conteudo || '').trim()
+      || String(prova_text || '').slice(0, 120).trim()
+      || 'Prova gerada',
+    tipo: tipo || 'Prova',
+    dificuldade: dificuldade || 'medio',
+    num_questoes: Number(num_questoes) || 10,
+    prova_text: String(prova_text || ''),
+    gabarito_text: gabarito_text ? String(gabarito_text) : '',
+    escola: escola || null,
+    professor: professor || null,
+  };
+
+  if (cabecalho && typeof cabecalho === 'object') row.cabecalho = cabecalho;
+  if (builder_snapshot && typeof builder_snapshot === 'object') row.builder_snapshot = builder_snapshot;
+
+  return row;
+}
+
 // ── POST /api/provas — save exam ──────────────────────────────────────────────
 app.post('/api/provas', auth, async (req, res) => {
-  const { disciplina, serie, conteudo, tipo, dificuldade,
-          num_questoes, prova_text, gabarito_text, escola, professor, cabecalho } = req.body;
+  if (!req.body?.prova_text || !String(req.body.prova_text).trim()) {
+    return res.status(400).json({ error: 'Texto da prova vazio.' });
+  }
+
+  const row = buildProvaRow(req.user.id, req.body);
+  const { data, error } = await userClient(req.token)
+    .from('provas')
+    .insert(row)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Erro ao salvar prova:', error.message);
+    return res.status(500).json({ error: error.message });
+  }
+  res.status(201).json(data);
+});
+
+// ── PUT /api/provas/:id — update saved exam ───────────────────────────────────
+app.put('/api/provas/:id', auth, async (req, res) => {
+  const updates = buildProvaRow(req.user.id, { ...req.body, user_id: undefined });
+  delete updates.user_id;
 
   const { data, error } = await userClient(req.token)
     .from('provas')
-    .insert({
-      user_id: req.user.id,
-      disciplina, serie, conteudo, tipo, dificuldade,
-      num_questoes, prova_text, gabarito_text, escola, professor,
-      cabecalho: cabecalho ?? {},
-    })
+    .update(updates)
+    .eq('id', req.params.id)
+    .eq('user_id', req.user.id)
     .select()
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'Prova não encontrada.' });
   res.json(data);
 });
 
