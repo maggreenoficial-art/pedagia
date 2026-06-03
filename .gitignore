@@ -6,3 +6,4 @@ tsconfig.tsbuildinfo
 *.log
 _check.js
 legacy/index.html.bak
+.vercel

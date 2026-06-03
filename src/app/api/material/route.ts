@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { requireUser, userClient } from '@/lib/server/supabase';
+import { requireUser, supabaseAdmin, userClient } from '@/lib/server/supabase';
+
+const BUCKET = 'pedagia';
 
 export async function GET(req: Request) {
   const auth = await requireUser(req);
@@ -128,4 +130,47 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json(mat, { status: 201 });
+}
+
+export async function DELETE(req: Request) {
+  const auth = await requireUser(req);
+  if ('error' in auth) return auth.error;
+
+  const materialId = new URL(req.url).searchParams.get('id');
+  if (!materialId) {
+    return NextResponse.json({ error: 'id obrigatório' }, { status: 400 });
+  }
+
+  const sb = userClient(auth.token);
+  const { data: mat, error: fetchErr } = await sb
+    .from('materials')
+    .select('id, storage_path')
+    .eq('id', materialId)
+    .eq('user_id', auth.user.id)
+    .maybeSingle();
+
+  if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 });
+  if (!mat) return NextResponse.json({ error: 'Material não encontrado' }, { status: 404 });
+
+  const paths = new Set<string>();
+  if (mat.storage_path) paths.add(mat.storage_path);
+  const bookPath = `${auth.user.id}/books/${materialId}.pdf`;
+  paths.add(bookPath);
+
+  if (paths.size) {
+    const { error: storageErr } = await supabaseAdmin.storage.from(BUCKET).remove([...paths]);
+    if (storageErr) {
+      console.warn('material DELETE storage:', storageErr.message);
+    }
+  }
+
+  const { error: delErr } = await sb
+    .from('materials')
+    .delete()
+    .eq('id', materialId)
+    .eq('user_id', auth.user.id);
+
+  if (delErr) return NextResponse.json({ error: delErr.message }, { status: 500 });
+
+  return NextResponse.json({ ok: true, materialId });
 }

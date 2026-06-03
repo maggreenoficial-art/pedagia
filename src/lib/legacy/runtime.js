@@ -48,6 +48,18 @@ const st = {
   examTemplate: null,
   examPlanOrder: null, // ['b:imageId', 't:1', 's:0', ...]
   evbFilter: 'all', // all | block | slot | text
+  pendingQuestions: [], // { id, type, statement, alternatives, correctAnswer, justification, status }
+  reviewFilter: 'all',
+  reviewPedNote: '',
+  builderPool: [], // { id, source, inProva, reviewStatus, variant, type, statement, ... }
+  builderSelectedMedia: new Set(),
+  builderSelectedExercises: new Set(),
+  builderPagesConfirmed: false,
+  builderConfirmedPageList: [],
+  builderPoolTab: 'turma', // turma | adaptada | all
+  builderWantAdapted: false,
+  /** Montar ④ — rascunhos de exercício por mídia: { [imageId]: { question, reviewStatus, type, loading? } } */
+  builderMediaDrafts: {},
 };
 
 const DRAFT_KEY = 'pgdraft';
@@ -55,7 +67,7 @@ const VIEW_KEY = 'pgview';
 
 function saveActiveView() {
   try {
-    if (st.activeView && st.activeView !== 'auth' && st.activeView !== 'loading') {
+    if (st.activeView && st.activeView !== 'auth' && st.activeView !== 'loading' && st.activeView !== 'revisao' && st.activeView !== 'builder') {
       sessionStorage.setItem(VIEW_KEY, st.activeView);
     }
   } catch {}
@@ -483,7 +495,6 @@ function showLoggedOutShell() {
   showView('auth');
   loadCab();
   loadHeadersLibrary({ silent: true }).catch(() => {});
-  loadSavedBuilder({ silent: true }).catch(() => {});
 }
 
 function getCore() {
@@ -1057,8 +1068,10 @@ function onLogin(session, opts = {}) {
   loadBnccPrefs();
   if (!restoreDraft()) {
     const savedView = restoreActiveView();
-    showView(savedView || 'form');
-    if (savedView === 'material') initMaterialView().catch(() => {});
+    const defaultView = savedView && savedView !== 'form' ? savedView : 'builder';
+    showView(defaultView);
+    if (defaultView === 'builder') initBuilderView().catch(() => {});
+    if (savedView === 'material' || defaultView === 'material') initMaterialView().catch(() => {});
     if (savedView === 'midias') refreshMidiasPage();
   }
   renderExamVisualBuilder();
@@ -1136,13 +1149,14 @@ async function doLogout() {
 function showView(name) {
   st.activeView = name;
   saveActiveView();
-  ['auth','form','material','midias','exercicios','loading','result','history','inteligente'].forEach(v => {
+  ['auth','builder','form','material','midias','exercicios','revisao','loading','result','history','inteligente'].forEach(v => {
     const el = document.getElementById('view-' + v);
     if (el) el.style.display = v === name ? '' : 'none';
   });
   const gbar = document.getElementById('gbar');
   const hideChrome = name === 'auth' || name === 'loading';
   if (gbar) gbar.style.display = !hideChrome && name === 'form' && currentSession ? '' : 'none';
+  if (name === 'builder') document.getElementById('bd-montar-btn')?.scrollIntoView({ block: 'nearest' });
   const bottomNav = document.getElementById('bottom-nav');
   if (bottomNav) bottomNav.style.display = !hideChrome && currentSession ? 'flex' : 'none';
   if (name === 'result') saveDraft();
@@ -1150,7 +1164,7 @@ function showView(name) {
   document.documentElement.classList.toggle('view-result-active', name === 'result');
 }
 function syncNavPills(view) {
-  const map = { form:'np-form', material:'np-material', midias:'np-midias', exercicios:'np-exercicios', inteligente:'np-ci', history:'np-hist' };
+  const map = { builder:'np-builder', form:'np-form', material:'np-material', midias:'np-midias', exercicios:'np-exercicios', inteligente:'np-ci', history:'np-hist' };
   Object.entries(map).forEach(([v, id]) => {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('on', v === view);
@@ -1161,6 +1175,12 @@ function syncNavPills(view) {
 }
 function goTo(view) {
   if (!currentSession) { showView('auth'); return; }
+  if (view === 'builder') {
+    showView('builder');
+    syncNavPills('builder');
+    initBuilderView().catch((e) => console.warn('builder', e));
+    return;
+  }
   if (view === 'material') {
     showView('material');
     syncNavPills('material');
@@ -2077,7 +2097,7 @@ function showBookLoadedUI(fromStorage = false) {
   document.getElementById('livro-empty').style.display = 'none';
   document.getElementById('livro-loaded').style.display = '';
   document.getElementById('livro-fname').textContent = st.bookFileName;
-  const extra = fromStorage ? ' · salvo no builder' : '';
+  const extra = fromStorage ? ' · na biblioteca' : '';
   document.getElementById('livro-pages').textContent =
     `${st.bookTotalPages} páginas${extra}`;
   const hint = document.getElementById('livro-builder-hint');
@@ -2325,45 +2345,177 @@ async function clearSavedBuilder() {
   }
 }
 
-async function clearBuilderData() {
-  const label = st.bookFileName ? ` "${st.bookFileName}"` : '';
-  if (!confirm(`Remover livro, capítulos e imagens do builder${label} (cache deste material)?`)) return;
-  if (window.indexedDB) {
+async function clearLocalMaterialCache(materialId) {
+  if (!window.indexedDB || !materialId) return;
+  const prev = st.materialId;
+  st.materialId = materialId;
+  try {
     await dbDelete(BOOK_STORE, bookStorageKey());
     await dbDelete(BUILDER_STORE, builderStorageKey());
+  } finally {
+    st.materialId = prev;
   }
-  if (cloudReady() && st.materialId && typeof PedagiaCloud.saveBuilderState === 'function') {
-    try {
-      await PedagiaCloud.saveBuilderState({
-        bookFileName: st.bookFileName,
-        bookTotalPages: 0,
-        bookChapters: [],
-        selectedChapterIdx: -1,
-        selectedPages: [],
-        imageCatalog: [],
-        imageQuestionBlocks: [],
-        savedAt: Date.now(),
-      }, st.materialId);
-    } catch (e) { console.warn(e); }
-  } else {
-    await clearSavedBuilder();
-  }
+}
+
+function resetActiveMaterialPdfState() {
   st.bookPdf = null;
   st.bookFile = null;
   st.bookFileName = '';
   st.bookTotalPages = 0;
   st.bookStoragePath = null;
   st.materialChapters = [];
+  st.bookChapters = [];
+  st.selectedChapterIdx = -1;
+  st.selectedPages = new Set();
+  st.imageCatalog = [];
+  st.imageQuestionBlocks = [];
+  st.extractedImages = [];
+}
+
+async function clearMaterialWorkflowOnly() {
+  const label = st.bookFileName ? ` "${st.bookFileName}"` : '';
+  if (!confirm(`Limpar só recortes, capítulos e páginas selecionadas${label}? O PDF continua na biblioteca.`)) {
+    return;
+  }
+  if (window.indexedDB) {
+    await dbDelete(BUILDER_STORE, builderStorageKey());
+  }
+  if (cloudReady() && st.materialId) {
+    try {
+      await PedagiaCloud.saveBuilderState(
+        {
+          bookFileName: st.bookFileName,
+          bookTotalPages: st.bookTotalPages,
+          bookChapters: [],
+          selectedChapterIdx: -1,
+          selectedPages: [],
+          imageCatalog: [],
+          imageQuestionBlocks: [],
+          savedAt: Date.now(),
+        },
+        st.materialId,
+      );
+    } catch (e) {
+      console.warn(e);
+    }
+  }
   resetMaterialWorkflowUI();
-  document.getElementById('f-livro').value = '';
-  document.getElementById('livro-empty').style.display = '';
-  document.getElementById('livro-loaded').style.display = 'none';
-  const hint = document.getElementById('livro-builder-hint');
-  if (hint) hint.style.display = 'none';
-  document.getElementById('pp1').className = 'pstep act';
-  document.getElementById('pp1').querySelector('.pdot').textContent = '1';
-  toast('Builder deste material limpo.', 'ok');
-  renderMaterialPicker();
+  toast('Recortes e seleção limpos. O livro permanece na biblioteca.', 'ok');
+  renderMaterialLibrary();
+}
+
+async function deleteMaterialFromLibrary(materialId) {
+  const id = materialId || st.materialId;
+  if (!id) {
+    resetActiveMaterialPdfState();
+    resetMaterialWorkflowUI();
+    document.getElementById('f-livro').value = '';
+    document.getElementById('livro-empty').style.display = '';
+    document.getElementById('livro-loaded').style.display = 'none';
+    toast('Nada selecionado para apagar.', 'err');
+    return;
+  }
+  const mat = (st.materialsList || []).find((m) => m.id === id);
+  const label = mat?.fileName || st.bookFileName || 'este livro';
+  if (!confirm(`Apagar "${label}" da biblioteca? O PDF será removido da nuvem e não voltará ao recarregar.`)) {
+    return;
+  }
+  const token = currentSession?.access_token;
+  if (!token) {
+    toast('Faça login.', 'err');
+    return;
+  }
+  try {
+    const r = await fetch(`/api/material?id=${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    await clearLocalMaterialCache(id);
+    st.materialsList = (st.materialsList || []).filter((m) => m.id !== id);
+    if (st.materialId === id) {
+      setStoredActiveMaterialId('');
+      st.materialId = null;
+      resetActiveMaterialPdfState();
+      resetMaterialWorkflowUI();
+      document.getElementById('f-livro').value = '';
+      document.getElementById('livro-empty').style.display = '';
+      document.getElementById('livro-loaded').style.display = 'none';
+      const hint = document.getElementById('livro-builder-hint');
+      if (hint) hint.style.display = 'none';
+    }
+    renderMaterialLibrary();
+    renderMaterialPicker();
+    builderRenderMaterialSelect();
+    toast('Livro removido da biblioteca.', 'ok');
+  } catch (e) {
+    toast('Erro ao apagar: ' + (e.message || e), 'err', 6000);
+  }
+}
+
+/** @deprecated use deleteMaterialFromLibrary */
+async function clearBuilderData() {
+  return deleteMaterialFromLibrary(st.materialId);
+}
+
+function renderMaterialLibrary() {
+  const list = document.getElementById('material-library-list');
+  const summary = document.getElementById('mat-lib-editor-summary');
+  if (!list) return;
+  const items = st.materialsList || [];
+  if (!items.length) {
+    list.innerHTML =
+      '<div class="bd-empty">Nenhum PDF na biblioteca. Toque em <b>+ Adicionar PDF</b> abaixo.</div>';
+    if (summary) summary.textContent = 'Recortes e capítulos (envie um PDF primeiro)';
+    return;
+  }
+  list.innerHTML = items
+    .map((m) => {
+      const on = m.id === st.materialId;
+      const pages = m.totalPages ? `${m.totalPages} pág.` : 'PDF pendente';
+      const ch = m.chapters?.length ? ` · ${m.chapters.length} cap.` : '';
+      return `<div class="mat-lib-item ${on ? 'on' : ''}" data-mid="${escHtml(m.id)}">
+        <div class="mat-lib-item-body" onclick="selectMaterialLibraryItem('${escHtml(m.id)}')">
+          <div class="mat-lib-item-title">${escHtml(m.fileName || 'Material')}</div>
+          <div class="mat-lib-item-meta">${pages}${ch}</div>
+        </div>
+        <div class="mat-lib-item-actions">
+          <button type="button" class="chip cy" onclick="event.stopPropagation();useMaterialInMontar('${escHtml(m.id)}')">Montar</button>
+          <button type="button" class="chip" onclick="event.stopPropagation();selectMaterialLibraryItem('${escHtml(m.id)}')">Editar</button>
+          <button type="button" class="chip" style="color:var(--R)" onclick="event.stopPropagation();deleteMaterialFromLibrary('${escHtml(m.id)}')">Apagar</button>
+        </div>
+      </div>`;
+    })
+    .join('');
+  if (summary) {
+    const cur = items.find((m) => m.id === st.materialId);
+    summary.textContent = cur
+      ? `Recortes e capítulos — ${cur.fileName}`
+      : 'Recortes e capítulos (selecione um livro)';
+  }
+}
+
+function materialLibraryAddNew() {
+  startNewMaterial();
+  const editor = document.getElementById('mat-lib-editor');
+  if (editor) editor.open = true;
+  setTimeout(() => document.getElementById('f-livro')?.click(), 200);
+}
+
+async function selectMaterialLibraryItem(materialId) {
+  if (!materialId) return;
+  const editor = document.getElementById('mat-lib-editor');
+  if (editor) editor.open = true;
+  await switchMaterial(materialId);
+  renderMaterialLibrary();
+}
+
+async function useMaterialInMontar(materialId) {
+  if (!materialId) return;
+  await switchMaterial(materialId);
+  builderSyncFields();
+  goTo('builder');
 }
 
 // ══════════════════════════════════════════════
@@ -2438,6 +2590,8 @@ async function handleBookFile(input) {
       } else {
         toast(`📕 ${file.name} salvo neste navegador (${st.bookTotalPages} págs.)`, 'ok', 4500);
       }
+      renderMaterialLibrary();
+      builderRenderMaterialSelect();
     } catch (e) {
       toast('Livro em uso, mas não foi possível salvar: ' + e.message, 'err', 5000);
     }
@@ -2736,6 +2890,7 @@ async function fetchMaterialsList() {
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || 'Erro ao listar materiais');
   st.materialsList = (data || []).map(normalizeMaterialRecord).filter(Boolean);
+  renderMaterialLibrary();
   return st.materialsList;
 }
 
@@ -2813,14 +2968,21 @@ async function flushCurrentMaterialState() {
   }
 }
 
-async function loadMaterialWorkspace(mat) {
+async function loadMaterialWorkspace(mat, opts = {}) {
   if (!mat) return false;
+  const { loadPdf = true, restoreBuilder = true } = opts;
   st.materialId = mat.id;
   st.bookFileName = mat.fileName || '';
   st.bookStoragePath = mat.storagePath || null;
   st.bookTotalPages = mat.totalPages || 0;
   applyMaterialChaptersToState(mat.chapters || []);
   setStoredActiveMaterialId(mat.id);
+
+  if (!loadPdf) {
+    renderMaterialPicker();
+    renderMaterialLibrary();
+    return !!mat.storagePath;
+  }
 
   resetMaterialWorkflowUI();
 
@@ -2851,19 +3013,40 @@ async function loadMaterialWorkspace(mat) {
       document.getElementById('pp2').querySelector('.pdot').textContent = '✓';
       document.getElementById('pp3').className = 'pstep act';
     }
-    await loadSavedBuilder({ silent: true });
+    if (restoreBuilder) await loadSavedBuilder({ silent: true });
   } else if (st.bookFileName) {
     document.getElementById('livro-pages').textContent =
-      'PDF não encontrado neste dispositivo — envie o arquivo novamente.';
+      mat.storagePath
+        ? 'PDF não encontrado — pode ter sido apagado da biblioteca.'
+        : 'Envie o PDF novamente para este material.';
   }
 
   renderMaterialPicker();
+  renderMaterialLibrary();
   return hasBook;
 }
 
 async function switchMaterial(materialId) {
   const nextId = materialId || '';
-  if ((st.materialId || '') === nextId) return;
+  if ((st.materialId || '') === nextId) {
+    if (nextId && !st.bookPdf) {
+      let mat = st.materialsList.find((m) => m.id === nextId);
+      if (!mat) {
+        try {
+          await fetchMaterialsList();
+          mat = st.materialsList.find((m) => m.id === nextId);
+        } catch (_) {}
+      }
+      if (mat) {
+        try {
+          await loadMaterialWorkspace(mat, { loadPdf: true, restoreBuilder: false });
+        } catch (e) {
+          console.warn('reload pdf same material', e);
+        }
+      }
+    }
+    return;
+  }
 
   await flushCurrentMaterialState();
 
@@ -2889,8 +3072,9 @@ async function switchMaterial(materialId) {
     return;
   }
 
-  await loadMaterialWorkspace(mat);
+  await loadMaterialWorkspace(mat, { loadPdf: true, restoreBuilder: true });
   toast(`Material: ${mat.fileName}`, 'ok', 2800);
+  renderMaterialLibrary();
 }
 
 function startNewMaterial(opts = {}) {
@@ -2913,38 +3097,34 @@ function startNewMaterial(opts = {}) {
   if (hint) hint.style.display = 'none';
 
   renderMaterialPicker();
+  renderMaterialLibrary();
   toast('Novo material — envie o PDF.', 'ok', 3200);
 }
 
 async function initMaterialView() {
   const toolbar = document.getElementById('material-toolbar');
-  if (toolbar) toolbar.style.display = currentSession ? '' : 'none';
+  if (toolbar) toolbar.style.display = 'none';
   if (!currentSession) return;
   try {
     await fetchMaterialsList();
   } catch (e) {
     toast(e.message, 'err');
   }
+  renderMaterialLibrary();
   renderMaterialPicker();
-  if (!st.materialId && st.materialsList.length) {
-    const stored = getStoredActiveMaterialId();
-    const pick = stored && st.materialsList.some(m => m.id === stored)
-      ? stored
-      : st.materialsList[0].id;
-    const mat = st.materialsList.find(m => m.id === pick);
-    if (mat) await loadMaterialWorkspace(mat);
-  } else if (st.materialId) {
-    const mat = st.materialsList.find(m => m.id === st.materialId);
-    if (mat) await loadMaterialWorkspace(mat);
-    else renderMaterialPicker();
+  if (st.materialId) {
+    const mat = st.materialsList.find((m) => m.id === st.materialId);
+    if (mat) {
+      st.bookFileName = mat.fileName || '';
+      st.bookStoragePath = mat.storagePath || null;
+      st.bookTotalPages = mat.totalPages || 0;
+      applyMaterialChaptersToState(mat.chapters || []);
+    }
   }
 }
 
 async function initMaterialsAfterLogin(opts = {}) {
-  if (!currentSession) {
-    await loadSavedBuilder({ silent: opts.silent });
-    return;
-  }
+  if (!currentSession) return;
   try {
     await fetchMaterialsList();
   } catch (e) {
@@ -2952,22 +3132,22 @@ async function initMaterialsAfterLogin(opts = {}) {
   }
 
   const stored = getStoredActiveMaterialId();
-  const pick = stored && st.materialsList.some(m => m.id === stored)
-    ? stored
-    : (st.materialsList[0]?.id || '');
-  if (pick) {
-    const mat = st.materialsList.find(m => m.id === pick);
+  if (stored && st.materialsList.some((m) => m.id === stored)) {
+    const mat = st.materialsList.find((m) => m.id === stored);
     if (mat) {
       st.materialId = mat.id;
-      st.bookFileName = mat.fileName || st.bookFileName;
+      st.bookFileName = mat.fileName || '';
       st.bookStoragePath = mat.storagePath || null;
-      st.bookTotalPages = mat.totalPages || st.bookTotalPages;
+      st.bookTotalPages = mat.totalPages || 0;
       applyMaterialChaptersToState(mat.chapters || []);
     }
+  } else {
+    st.materialId = null;
+    resetActiveMaterialPdfState();
   }
 
-  await loadSavedBuilder({ silent: opts.silent });
   renderMaterialPicker();
+  renderMaterialLibrary();
 }
 
 async function ensureMaterialRecordForBook() {
@@ -2989,6 +3169,7 @@ async function ensureMaterialRecordForBook() {
   setStoredActiveMaterialId(rec.id);
   upsertMaterialInList(rec);
   renderMaterialPicker();
+  renderMaterialLibrary();
   return rec.id;
 }
 
@@ -3798,6 +3979,42 @@ function updatePgCount() {
   if (el) el.textContent =
     n + ' página' + (n!==1?'s':'') + ' selecionada' + (n!==1?'s':'') + imgInfo + ' · texto + fontes';
 }
+
+function selecionarIntervaloPaginas() {
+  const max = st.bookTotalPages || st.bookPdf?.numPages || 0;
+  if (!st.bookPdf || !max) {
+    toast('Carregue o PDF do livro primeiro.', 'err');
+    return;
+  }
+  const from = parseInt(v('f-pag-from'), 10);
+  const to = parseInt(v('f-pag-to'), 10);
+  if (!from || !to) {
+    toast('Informe página inicial e final.', 'err');
+    return;
+  }
+  const lo = Math.max(1, Math.min(from, to, max));
+  const hi = Math.max(1, Math.min(Math.max(from, to), max));
+  if (hi - lo > 40) {
+    toast('Selecione no máximo 40 páginas por vez.', 'err', 5000);
+    return;
+  }
+  st.selectedPages = new Set();
+  const pages = [];
+  for (let p = lo; p <= hi; p++) {
+    pages.push(p);
+    st.selectedPages.add(p);
+  }
+  renderPageChips(pages);
+  renderPageThumbnails(pages).catch(() => {});
+  updatePgCount();
+  const step4 = document.getElementById('step4-item');
+  if (step4) step4.style.display = 'flex';
+  const imgSec = document.getElementById('img-section');
+  if (imgSec) imgSec.style.display = '';
+  toast(`${pages.length} página(s) selecionada(s).`, 'ok');
+  scheduleSaveBuilder();
+}
+
 function onManualCap() {
   st.selectedChapterIdx = -1;
   document.querySelectorAll('#chapter-list .citem').forEach(c => c.classList.remove('on'));
@@ -4778,9 +4995,12 @@ let _cropSel = { x: 0, y: 0, w: 0, h: 0, dragging: false, startX: 0, startY: 0 }
 let _cropEventsBound = false;
 
 function updateCropGalleryCount() {
-  const el = document.getElementById('img-crop-count');
   const n = st.imageCatalog.length;
-  if (el) el.textContent = n ? `(${n})` : '';
+  const label = n ? `(${n})` : '';
+  for (const id of ['img-crop-count', 'bd-crop-count']) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = label;
+  }
 }
 
 function buildCropThumbCardHtml(entry) {
@@ -4803,14 +5023,19 @@ function buildCropThumbCardHtml(entry) {
         </div>`;
 }
 
-function appendCropCardToGallery(entry) {
-  const gallery = document.getElementById('img-gallery');
-  if (!gallery || !entry) return;
-  const empty = gallery.querySelector('.img-crops-empty');
-  if (empty) empty.remove();
-  gallery.insertAdjacentHTML('beforeend', buildCropThumbCardHtml(entry));
+function appendCropCardToGallery(entry, galleryIds) {
+  if (!entry) return;
+  const ids = galleryIds || ['img-gallery', 'bd-img-gallery'];
+  for (const gid of ids) {
+    const gallery = document.getElementById(gid);
+    if (!gallery) continue;
+    const empty = gallery.querySelector('.img-crops-empty');
+    if (empty) empty.remove();
+    gallery.insertAdjacentHTML('beforeend', buildCropThumbCardHtml(entry));
+  }
   updateCropGalleryCount();
   updateBlockSelInfo();
+  builderRenderBdCropGallery();
   scheduleSaveBuilder();
 }
 
@@ -4972,23 +5197,34 @@ function confirmCropSelection() {
 }
 
 // ── Galeria: páginas para recorte manual + figuras já recortadas ─────
-async function renderPageThumbnails(pages) {
+async function renderPageThumbnails(pages, opts = {}) {
   if (!st.bookPdf || pages.length === 0) return;
   if (st.imgRendering) return;
   st.imgRendering = true;
 
-  const pageGrid = document.getElementById('img-page-grid');
-  const gallery = document.getElementById('img-gallery');
-  const imgSec = document.getElementById('img-section');
-  const status = document.getElementById('img-status');
+  const pageGridId = opts.pageGridId || 'img-page-grid';
+  const galleryId = opts.galleryId || 'img-gallery';
+  const statusId = opts.statusId || 'img-status';
+  const sectionId = opts.sectionId || 'img-section';
+  const scrollTarget = opts.scroll !== false;
 
-  if (!pageGrid || !gallery || !imgSec) { st.imgRendering = false; return; }
+  const pageGrid = document.getElementById(pageGridId);
+  const gallery = document.getElementById(galleryId);
+  const imgSec = sectionId ? document.getElementById(sectionId) : null;
+  const status = document.getElementById(statusId);
 
-  imgSec.style.display = '';
+  if (!pageGrid) {
+    st.imgRendering = false;
+    return;
+  }
+
+  if (imgSec) imgSec.style.display = '';
   pageGrid.innerHTML = `<div class="img-spin" style="grid-column:1/-1;padding:20px;text-align:center">⏳ Carregando páginas...</div>`;
-  gallery.innerHTML = st.imageCatalog.length
-    ? st.imageCatalog.map(e => buildCropThumbCardHtml(e)).join('')
-    : '<div class="img-crops-empty img-no-img" style="grid-column:1/-1">Nenhum recorte ainda — use «Recortar figura» em uma página.</div>';
+  if (gallery) {
+    gallery.innerHTML = st.imageCatalog.length
+      ? st.imageCatalog.map((e) => buildCropThumbCardHtml(e)).join('')
+      : '<div class="img-crops-empty img-no-img" style="grid-column:1/-1">Nenhum recorte ainda — use «Recortar figura» em uma página.</div>';
+  }
   updateCropGalleryCount();
 
   if (status) status.textContent = `Abrindo ${pages.length} página(s) para recorte manual...`;
@@ -5002,7 +5238,7 @@ async function renderPageThumbnails(pages) {
       const pdfPage = await st.bookPdf.getPage(pageNum);
       try {
         const ct = await pdfPage.getTextContent();
-        st._pageSources[pageNum] = extractSources(ct.items.map(i => i.str).join(' '));
+        st._pageSources[pageNum] = extractSources(ct.items.map((i) => i.str).join(' '));
       } catch {}
       const bVp = pdfPage.getViewport({ scale: 1.0 });
       const tVp = pdfPage.getViewport({ scale: Math.min(300 / bVp.width, 1.4) });
@@ -5022,17 +5258,57 @@ async function renderPageThumbnails(pages) {
   }
 
   if (status) {
-    status.textContent = `${pages.length} página(s) — recorte as figuras; a IA só sugere questões depois`;
+    status.textContent = `${pages.length} página(s) — toque em Recortar figura em cada miniatura`;
   }
 
   const qRow = document.getElementById('img-q-row');
-  if (qRow) qRow.style.display = 'none';
+  if (qRow && !opts.builderMode) qRow.style.display = 'none';
 
   updateBlockSelInfo();
   st.imgRendering = false;
-  setTimeout(() => imgSec?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 200);
+  if (scrollTarget && imgSec) {
+    setTimeout(() => imgSec.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 200);
+  }
   scheduleSaveBuilder();
   scheduleExamPreview();
+}
+
+function builderRenderBdCropGallery() {
+  const gallery = document.getElementById('bd-img-gallery');
+  if (!gallery) return;
+  const pages = new Set([...(st.selectedPages || []), ...(st.builderConfirmedPageList || [])]);
+  const items = (st.imageCatalog || []).filter((e) => {
+    const p = e.pageNumber || e.pageNum;
+    return !pages.size || pages.has(p);
+  });
+  gallery.innerHTML = items.length
+    ? items.map((e) => buildCropThumbCardHtml(e)).join('')
+    : '<div class="img-crops-empty img-no-img" style="grid-column:1/-1">Nenhum recorte nestas páginas ainda.</div>';
+}
+
+async function builderLoadCropPages() {
+  try {
+    await ensureMaterialPdfLoaded();
+  } catch (e) {
+    toast(e.message || 'Erro ao carregar PDF', 'err', 6000);
+    return;
+  }
+  const pages = [...(st.selectedPages || [])].sort((a, b) => a - b);
+  if (!pages.length) {
+    toast('Marque páginas (intervalo ou chips) antes de recortar.', 'err');
+    return;
+  }
+  const sec = document.getElementById('bd-crop-section');
+  if (sec) sec.style.display = '';
+  await renderPageThumbnails(pages, {
+    pageGridId: 'bd-img-page-grid',
+    galleryId: 'bd-img-gallery',
+    statusId: 'bd-crop-status',
+    sectionId: 'bd-crop-section',
+    scroll: false,
+    builderMode: true,
+  });
+  builderRenderBdCropGallery();
 }
 
 function togImgBlockCard(imageId) {
@@ -5100,94 +5376,87 @@ function findSuggestUi(imageId) {
   };
 }
 
-async function suggestQuestionForImage(imageId) {
+async function fetchAndBuildImageQuestion(imageId) {
   if (!(await ensureFreshSession())) {
-    toast('Faça login para usar a IA.', 'err');
-    return;
+    throw new Error('Faça login para usar a IA.');
   }
   let image = getCloudImageEntry(imageId);
   if (!image) {
-    const cloud = (st.cloudImageIndex || []).find(i => i.imageId === imageId);
+    const cloud = (st.cloudImageIndex || []).find((i) => i.imageId === imageId);
     if (cloud) image = cloud;
   }
-  if (!image) {
-    toast('Imagem não encontrada. Atualize a lista em Minhas mídias.', 'err');
-    return;
-  }
+  if (!image) throw new Error('Imagem não encontrada. Atualize em Minhas mídias.');
   if (!getImageCatalogEntry(imageId)) {
     await useCloudImageInBuilder(imageId, { silent: true });
     image = getCloudImageEntry(imageId) || image;
   }
   if (!(image.sourceText || image.caption || image.src || '').trim()) {
     const entry = getCloudImageEntry(imageId) || image;
-    if (entry && !entry.segmented) {
-      const { btn } = findSuggestUi(imageId);
-      if (btn) btn.textContent = '⏳ Buscando fonte…';
-      await segmentImageWithAI(entry);
-      image = getCloudImageEntry(imageId) || image;
-    }
+    if (entry && !entry.segmented) await segmentImageWithAI(entry);
+    image = getCloudImageEntry(imageId) || image;
   }
   const b64 = await ensureImageB64(image);
   if (!b64) {
-    toast('Não foi possível carregar a imagem da nuvem. Clique em Atualizar ou envie de novo.', 'err', 5500);
-    return;
+    throw new Error('Não foi possível carregar a imagem. Atualize a lista ou envie de novo.');
   }
+  builderSyncFields();
+  const tok = currentSession?.access_token || null;
+  const resp = await fetch('/api/sugerir-questao', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) },
+    body: JSON.stringify({
+      imageId,
+      imageBase64: b64,
+      storagePath: image.storagePath || '',
+      srcHint: image.sourceText || image.caption || image.src || '',
+      caption: image.sourceText || image.caption || '',
+      pageNumber: image.pageNumber || image.pageNum,
+      disc: v('f-disc') || v('bd-disc'),
+      serie: v('f-serie') || v('bd-serie'),
+    }),
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.question) throw new Error(data.error || 'Erro ao gerar exercício');
+  if (data.imageId !== imageId) throw new Error('A IA retornou uma questão para outra imagem');
+
+  const block = {
+    blockId: `block_${imageId}_${Date.now()}`,
+    selected: false,
+    imageId,
+    image: {
+      imageId,
+      previewUrl: image.previewUrl,
+      dataUri: image.dataUri,
+      base64: b64,
+      caption: image.caption,
+      pageNumber: image.pageNumber || image.pageNum,
+      w: image.w,
+      h: image.h,
+    },
+    question: data.question,
+  };
+  upsertImageBlock(block);
+  const imgEntry = getImageCatalogEntry(imageId);
+  if (imgEntry) imgEntry.savedToBuilder = true;
+  return { block, image, question: data.question };
+}
+
+async function suggestQuestionForImage(imageId) {
   const { btn, box } = findSuggestUi(imageId);
   if (!btn || !box) {
     toast('Não foi possível abrir o painel de sugestão nesta tela.', 'err', 5000);
     return;
   }
-
   if (box.classList.contains('show') && box.dataset.loaded === '1') {
     box.classList.toggle('show');
     return;
   }
-
   btn.disabled = true;
   btn.textContent = '⏳ Analisando...';
   box.innerHTML = '';
   box.classList.remove('show');
-
   try {
-    const tok = currentSession?.access_token || null;
-    const resp = await fetch('/api/sugerir-questao', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) },
-      body: JSON.stringify({
-        imageId,
-        imageBase64: b64,
-        storagePath: image.storagePath || '',
-        srcHint: image.sourceText || image.caption || image.src || '',
-        caption: image.sourceText || image.caption || '',
-        pageNumber: image.pageNumber || image.pageNum,
-        disc: v('f-disc'),
-        serie: v('f-serie'),
-      }),
-    });
-    const data = await resp.json();
-    if (!resp.ok || !data.question) throw new Error(data.error || 'Erro ao gerar sugestão');
-    if (data.imageId !== imageId) throw new Error('A IA retornou uma questão para outra imagem');
-
-    const block = {
-      blockId: `block_${imageId}_${Date.now()}`,
-      selected: false,
-      imageId,
-      image: {
-        imageId,
-        previewUrl: image.previewUrl,
-        dataUri: image.dataUri,
-        base64: b64,
-        caption: image.caption,
-        pageNumber: image.pageNumber || image.pageNum,
-        w: image.w,
-        h: image.h,
-      },
-      question: data.question,
-    };
-    upsertImageBlock(block);
-    const imgEntry = getImageCatalogEntry(imageId);
-    if (imgEntry) imgEntry.savedToBuilder = true;
-
+    const { block, image } = await fetchAndBuildImageQuestion(imageId);
     const preview = formatBlockPreview(block);
     box.innerHTML = escHtml(preview)
       .replace(/\n/g, '<br>')
@@ -5448,18 +5717,1404 @@ ${src === 'livro' ? '- Use SOMENTE o conteúdo extraído acima. Não busque info
 }
 
 // ══════════════════════════════════════════════
-// GENERATE
+// BUILDER FINAL — montar prova em uma página
+// ══════════════════════════════════════════════
+function builderSyncFields() {
+  const map = [
+    ['bd-disc', 'f-disc'],
+    ['bd-serie', 'f-serie'],
+    ['bd-tipo', 'f-tipo'],
+    ['bd-valor', 'f-valor'],
+  ];
+  map.forEach(([from, to]) => {
+    const src = document.getElementById(from);
+    const dst = document.getElementById(to);
+    if (src && dst) dst.value = src.value;
+  });
+  const bt = document.getElementById('bd-topicos');
+  const ft = document.getElementById('f-topicos');
+  if (bt && ft) ft.value = bt.value;
+  const n = parseInt(document.getElementById('bd-numq')?.textContent || '10', 10);
+  st.numQ = Math.min(30, Math.max(3, n || 10));
+  const nv = document.getElementById('nv');
+  if (nv) nv.textContent = st.numQ;
+}
+
+function builderLoadFields() {
+  const map = [
+    ['f-disc', 'bd-disc'],
+    ['f-serie', 'bd-serie'],
+    ['f-tipo', 'bd-tipo'],
+    ['f-valor', 'bd-valor'],
+  ];
+  map.forEach(([from, to]) => {
+    const src = document.getElementById(from);
+    const dst = document.getElementById(to);
+    if (src && dst) dst.value = src.value || dst.value;
+  });
+  const ft = document.getElementById('f-topicos');
+  const bt = document.getElementById('bd-topicos');
+  if (ft && bt) bt.value = ft.value || '';
+  const bdN = document.getElementById('bd-numq');
+  if (bdN) bdN.textContent = String(st.numQ || 10);
+}
+
+function builderChNumQ(d) {
+  st.numQ = Math.min(30, Math.max(3, (st.numQ || 10) + d));
+  const el = document.getElementById('bd-numq');
+  if (el) el.textContent = String(st.numQ);
+  const nv = document.getElementById('nv');
+  if (nv) nv.textContent = st.numQ;
+}
+
+function builderInvalidatePagesConfirm() {
+  if (!st.builderPagesConfirmed) return;
+  st.builderPagesConfirmed = false;
+  st.builderConfirmedPageList = [];
+  st.builderPool = (st.builderPool || []).filter((p) => p.source !== 'ai');
+  builderUpdateQuestoesUI();
+}
+
+function builderOnTopicosInput() {
+  builderSyncFields();
+  if (v('bd-topicos').trim()) builderInvalidatePagesConfirm();
+}
+
+function builderOnAdaptadaToggle() {
+  const cb = document.getElementById('bd-adaptada');
+  const notes = document.getElementById('bd-adapt-notas');
+  st.builderWantAdapted = !!cb?.checked;
+  if (notes) notes.style.display = st.builderWantAdapted ? '' : 'none';
+}
+
+function builderUpdateQuestoesUI() {
+  const gate = document.getElementById('bd-questoes-gate');
+  const block = document.getElementById('bd-questoes-block');
+  const btnGerar = document.getElementById('bd-btn-gerar');
+  const chips = document.getElementById('bd-page-chips');
+  const status = document.getElementById('bd-pages-status');
+  const btnConfirm = document.getElementById('bd-btn-confirm-pages');
+  const btnChange = document.getElementById('bd-btn-change-pages');
+  const topicos = v('bd-topicos').trim();
+  const confirmed = st.builderPagesConfirmed;
+
+  if (gate) gate.style.display = confirmed ? 'none' : '';
+  if (block) block.style.display = confirmed ? '' : 'none';
+  if (btnGerar) btnGerar.disabled = !confirmed;
+  if (chips) chips.classList.toggle('bd-locked', confirmed && !topicos);
+  if (btnConfirm) btnConfirm.style.display = confirmed ? 'none' : '';
+  if (btnChange) btnChange.style.display = confirmed ? '' : 'none';
+
+  if (status) {
+    if (confirmed) {
+      const label = topicos
+        ? 'Conteúdo escrito confirmado para a IA.'
+        : `Páginas confirmadas: ${(st.builderConfirmedPageList || []).join(', ')}`;
+      status.textContent = `✓ ${label}`;
+      status.className = 'bd-pages-status bd-pages-ok';
+    } else {
+      status.textContent = topicos
+        ? 'Texto informado — confirme para liberar a geração.'
+        : 'Selecione as páginas e toque em Confirmar para a IA gerar questões.';
+      status.className = 'bd-pages-status bd-pages-pending';
+    }
+  }
+  builderRenderPool();
+}
+
+async function ensureMaterialPdfLoaded() {
+  if (st.bookPdf) return true;
+  if (!st.materialId) {
+    throw new Error('Selecione um material no passo ② (lista de livros).');
+  }
+  let mat = st.materialsList?.find((m) => m.id === st.materialId);
+  if (!mat) {
+    await fetchMaterialsList();
+    mat = st.materialsList?.find((m) => m.id === st.materialId);
+  }
+  if (!mat) throw new Error('Material não encontrado. Escolha o livro na lista.');
+  st.bookFileName = mat.fileName || st.bookFileName;
+  st.bookStoragePath = mat.storagePath || st.bookStoragePath;
+  if (mat.totalPages) st.bookTotalPages = mat.totalPages;
+  const ok = await loadBookFromStorage();
+  if (!ok) {
+    throw new Error(
+      'PDF do livro não disponível. Abra a aba Material, selecione o livro (ou envie o PDF de novo) e volte ao Montar.',
+    );
+  }
+  return true;
+}
+
+async function builderConfirmPages() {
+  builderSyncFields();
+  const topicos = v('bd-topicos').trim();
+  if (topicos) {
+    st.builderPagesConfirmed = true;
+    st.builderConfirmedPageList = [];
+    builderUpdateQuestoesUI();
+    toast('Conteúdo confirmado. Agora gere as questões.', 'ok');
+    return;
+  }
+  if (!st.selectedPages?.size) {
+    toast('Marque as páginas do livro ou escreva o conteúdo.', 'err', 5000);
+    return;
+  }
+  if (!st.materialId) {
+    toast('Selecione um material na lista de livros.', 'err');
+    return;
+  }
+  const btn = document.getElementById('bd-btn-confirm-pages');
+  if (btn) { btn.disabled = true; btn.textContent = 'Carregando PDF…'; }
+  try {
+    await ensureMaterialPdfLoaded();
+  } catch (e) {
+    toast(e.message || 'Erro ao carregar PDF', 'err', 6000);
+    return;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '✓ Confirmar páginas para a IA';
+    }
+  }
+  st.builderPagesConfirmed = true;
+  st.builderConfirmedPageList = [...st.selectedPages].sort((a, b) => a - b);
+  const cropSec = document.getElementById('bd-crop-section');
+  if (cropSec) cropSec.style.display = '';
+  builderUpdateQuestoesUI();
+  builderRenderBdCropGallery();
+  toast(`${st.builderConfirmedPageList.length} página(s) confirmadas para extração.`, 'ok', 4000);
+}
+
+function builderResetPagesConfirm() {
+  builderInvalidatePagesConfirm();
+  builderUpdateQuestoesUI();
+  toast('Altere as páginas e confirme novamente.', 'ok');
+}
+
+function builderSetPoolTab(tab) {
+  st.builderPoolTab = tab || 'turma';
+  document.querySelectorAll('.bd-pool-tab').forEach((btn) => {
+    btn.classList.toggle('on', btn.dataset.bdPool === st.builderPoolTab);
+  });
+  builderRenderPool();
+}
+
+function builderRenderMaterialSelect() {
+  const sel = document.getElementById('bd-material');
+  const hint = document.getElementById('bd-material-hint');
+  if (!sel) return;
+  const items = st.materialsList || [];
+  sel.innerHTML = [
+    '<option value="">— Escolha um material —</option>',
+    ...items.map((m) => {
+      const label = escHtml((m.fileName || 'Material').slice(0, 48));
+      const pages = m.totalPages ? ` · ${m.totalPages} pág.` : '';
+      return `<option value="${escHtml(m.id)}"${m.id === st.materialId ? ' selected' : ''}>${label}${pages}</option>`;
+    }),
+  ].join('');
+  if (hint) {
+    if (!items.length) hint.textContent = 'Nenhum PDF na nuvem — envie em Material.';
+    else if (st.materialId) {
+      const cur = items.find((m) => m.id === st.materialId);
+      hint.textContent = cur ? `${cur.fileName} · ${st.bookTotalPages || '?'} páginas` : 'Material ativo';
+    } else hint.textContent = 'Selecione o livro para extrair páginas.';
+  }
+}
+
+function builderRenderHeaderSelect() {
+  const sel = document.getElementById('bd-header');
+  if (!sel) return;
+  const items = st.headersIndex?.items || [];
+  if (!items.length) {
+    sel.innerHTML = '<option value="">— Cadastre um cabeçalho —</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML = items.map((it) => `<option value="${it.id}">${escapeHtml(it.name)}</option>`).join('');
+  sel.value =
+    st.activeHeaderId && items.some((i) => i.id === st.activeHeaderId)
+      ? st.activeHeaderId
+      : items[0].id;
+}
+
+function builderRenderPageChips() {
+  const box = document.getElementById('bd-page-chips');
+  const cnt = document.getElementById('bd-page-count');
+  const pages = [...(st.selectedPages || [])].sort((a, b) => a - b);
+  if (box) {
+    box.innerHTML = pages.length
+      ? pages.map((p) => `<div class="pc on" data-pg="${p}" onclick="builderTogglePage(this)">${p}</div>`).join('')
+      : '';
+  }
+  if (cnt) cnt.textContent = pages.length ? `${pages.length} página(s) selecionada(s)` : '0 páginas — defina o intervalo';
+}
+
+function builderTogglePage(el) {
+  if (st.builderPagesConfirmed) return;
+  const p = parseInt(el.dataset.pg, 10);
+  el.classList.toggle('on');
+  if (el.classList.contains('on')) st.selectedPages.add(p);
+  else st.selectedPages.delete(p);
+  builderRenderPageChips();
+}
+
+async function builderOnMaterialChange(materialId) {
+  if (!materialId) {
+    startNewMaterial({ skipFlush: true });
+    builderRenderMaterialSelect();
+    return;
+  }
+  try {
+    await switchMaterial(materialId);
+    builderRenderMaterialSelect();
+    builderRenderPageChips();
+    const from = document.getElementById('bd-pag-from');
+    const to = document.getElementById('bd-pag-to');
+    if (from && !from.value && st.bookTotalPages) from.value = '1';
+    if (to && !to.value && st.bookTotalPages) to.value = String(Math.min(st.bookTotalPages, 15));
+    builderInvalidatePagesConfirm();
+    builderUpdateQuestoesUI();
+  } catch (e) {
+    toast(e.message || 'Erro ao carregar material', 'err');
+  }
+}
+
+async function builderApplyPages() {
+  if (st.materialId && !st.bookPdf) {
+    try {
+      await ensureMaterialPdfLoaded();
+    } catch (e) {
+      toast(e.message || 'Erro ao carregar PDF', 'err', 6000);
+      return;
+    }
+  }
+  const max = st.bookTotalPages || st.bookPdf?.numPages || 0;
+  if (!max) {
+    toast('Selecione um material com PDF carregado.', 'err');
+    return;
+  }
+  const from = parseInt(v('bd-pag-from'), 10);
+  const to = parseInt(v('bd-pag-to'), 10);
+  if (!from || !to) {
+    toast('Informe página inicial e final.', 'err');
+    return;
+  }
+  const lo = Math.max(1, Math.min(from, to, max));
+  const hi = Math.max(1, Math.min(Math.max(from, to), max));
+  if (hi - lo > 40) {
+    toast('Máximo 40 páginas por vez.', 'err', 5000);
+    return;
+  }
+  st.selectedPages = new Set();
+  for (let p = lo; p <= hi; p++) st.selectedPages.add(p);
+  builderInvalidatePagesConfirm();
+  builderRenderPageChips();
+  builderUpdateQuestoesUI();
+  const cropSec = document.getElementById('bd-crop-section');
+  if (cropSec && st.bookPdf) cropSec.style.display = '';
+  toast(`${hi - lo + 1} página(s) marcadas — confirme para liberar a IA.`, 'ok');
+}
+
+async function builderOnHeaderChange(id) {
+  if (!id) return;
+  await applyHeader(id, { silent: true });
+}
+
+function builderPoolItemFromExercise(ex) {
+  const q = ex.question;
+  if (!q?.statement) return null;
+  const type = q.type === 'discursive' ? 'discursive' : 'multiple_choice';
+  return {
+    id: `bex-${ex.id}`,
+    source: 'exercise',
+    variant: 'turma',
+    exerciseId: ex.id,
+    imageId: ex.image_id,
+    inProva: false,
+    reviewStatus: 'pending',
+    type,
+    title: ex.image_title || 'Exercício salvo',
+    statement: q.statement,
+    alternatives: q.alternatives || [],
+    correctAnswer: q.correctAnswer || '',
+    justification: '',
+  };
+}
+
+function builderPoolItemFromMedia(img, draft) {
+  const d = draft || st.builderMediaDrafts?.[img.imageId];
+  const block = st.imageQuestionBlocks.find((b) => b.imageId === img.imageId);
+  const q = d?.question || block?.question;
+  const type =
+    d?.type === 'discursive' || q?.type === 'discursive' ? 'discursive' : 'multiple_choice';
+  if (!q?.statement) return null;
+  return {
+    id: `bmed-${img.imageId}`,
+    source: 'media',
+    variant: 'turma',
+    imageId: img.imageId,
+    inProva: false,
+    reviewStatus: 'pending',
+    type,
+    title: img.title || img.caption || 'Mídia',
+    statement: q.statement,
+    alternatives: q.alternatives || [],
+    correctAnswer: q.correctAnswer || '',
+    justification: q.justification || '',
+  };
+}
+
+function builderMediaDraftHtml(imageId, draft, img) {
+  if (!draft || draft.loading) {
+    return '<p class="bd-media-loading">Gerando exercício com a IA…</p>';
+  }
+  if (draft.reviewStatus === 'rejected') {
+    return '<p class="bd-media-rejected">Exercício rejeitado. Gere outro ou escolha outra mídia.</p>';
+  }
+  if (!draft.question?.statement) return '';
+  const q = draft.question;
+  const isMc = draft.type !== 'discursive' && q.type !== 'discursive';
+  const pid = escAttr(imageId);
+  const alts =
+    isMc && q.alternatives?.some((a) => a.text)
+      ? `<ul class="rev-alts">${q.alternatives
+          .filter((a) => a.text)
+          .map(
+            (a) =>
+              `<li class="${a.letter === q.correctAnswer ? 'correct' : ''}"><b>${escHtml(a.letter)})</b> ${escHtml(a.text)}</li>`,
+          )
+          .join('')}</ul>`
+      : '';
+  const status = draft.reviewStatus || 'pending';
+  const statusLabel =
+    status === 'approved' ? 'Aprovado — na lista ⑥' : status === 'rejected' ? 'Rejeitado' : 'Aguardando sua revisão';
+  return `
+    <div class="bd-media-review rev-card rev-st-${status}">
+      <p class="bd-media-review-status"><span class="rev-status ${status}">${statusLabel}</span></p>
+      <div class="rev-card-body">${escHtml(q.statement)}${alts}</div>
+      <div class="bd-pool-type-row">
+        <label class="fl" style="margin:0;font-size:11px">Tipo</label>
+        <select class="bd-pool-type-sel" onchange="builderSetMediaDraftType('${pid}', this.value)">
+          <option value="multiple_choice"${isMc ? ' selected' : ''}>Múltipla escolha</option>
+          <option value="discursive"${!isMc ? ' selected' : ''}>Discursiva</option>
+        </select>
+      </div>
+      <div class="rev-card-actions">
+        <button type="button" class="btn-ir" style="flex:1;background:var(--Ga);color:var(--G);border-color:rgba(24,160,60,.25)" onclick="builderApproveMediaExercise('${pid}')">✓ Aprovar exercício</button>
+        <button type="button" class="chip" onclick="builderRejectMediaExercise('${pid}')">✕ Rejeitar</button>
+        ${
+          status === 'approved'
+            ? `<button type="button" class="chip" onclick="builderRegenerateMediaExercise('${pid}')">↻ Gerar de novo</button>`
+            : ''
+        }
+      </div>
+    </div>`;
+}
+
+function builderSyncPoolFromSelections() {
+  const prev = new Map(
+    (st.builderPool || []).map((p) => [
+      p.id,
+      { inProva: p.inProva, reviewStatus: p.reviewStatus, type: p.type },
+    ]),
+  );
+  const pool = (st.builderPool || []).filter((p) => p.source === 'ai');
+
+  for (const exId of st.builderSelectedExercises) {
+    const ex = (st.exerciciosData || []).find((x) => String(x.id) === String(exId));
+    if (!ex) continue;
+    const item = builderPoolItemFromExercise(ex);
+    if (item && !pool.some((p) => p.id === item.id)) pool.push(item);
+  }
+
+  for (const imageId of Object.keys(st.builderMediaDrafts || {})) {
+    const draft = st.builderMediaDrafts[imageId];
+    if (draft?.reviewStatus !== 'approved') continue;
+    const img = (st.cloudImageIndex || []).find((i) => i.imageId === imageId);
+    if (!img) continue;
+    const item = builderPoolItemFromMedia(img, draft);
+    if (item && !pool.some((p) => p.id === item.id)) pool.push(item);
+  }
+
+  pool.forEach((p) => {
+    const saved = prev.get(p.id);
+    if (saved) {
+      p.inProva = saved.inProva;
+      if (saved.reviewStatus) p.reviewStatus = saved.reviewStatus;
+      if (saved.type) p.type = saved.type;
+    }
+  });
+  st.builderPool = pool;
+}
+
+function builderNormalizeApiQuestion(raw, index) {
+  const q = raw && typeof raw === 'object' ? raw : {};
+  let statement = String(q.statement || q.enunciado || q.questao || q.text || '').trim();
+  statement = statement.replace(/^\[DISCURSIVA\]\s*/i, '').trim();
+  const typeRaw = String(q.type || q.tipo || 'multiple_choice').toLowerCase();
+  const isDisc =
+    typeRaw.includes('disc') ||
+    q.discursive === true ||
+    (!q.alternatives && !q.alternativas && /\[discursiva\]/i.test(statement));
+  const type = isDisc ? 'discursive' : 'multiple_choice';
+  const rawAlts = q.alternatives || q.alternativas || [];
+  const letters = ['a', 'b', 'c', 'd', 'e'];
+  const alternatives = [];
+  for (let i = 0; i < 5; i++) {
+    const item = rawAlts[i];
+    if (item && typeof item === 'object') {
+      alternatives.push({
+        letter: String(item.letter || item.letra || letters[i]).toLowerCase(),
+        text: String(item.text || item.texto || '').trim(),
+      });
+    } else if (typeof item === 'string' && item.trim()) {
+      alternatives.push({ letter: letters[i], text: item.trim() });
+    } else {
+      alternatives.push({ letter: letters[i], text: '' });
+    }
+  }
+  let correctAnswer = String(q.correctAnswer || q.gabarito || q.resposta || 'a')
+    .toLowerCase()
+    .trim();
+  const m = correctAnswer.match(/\b([a-e])\b/);
+  correctAnswer = m ? m[1] : letters[0];
+  return {
+    statement: statement || `(Questão ${index + 1} — enunciado não retornado pela IA)`,
+    type,
+    alternatives,
+    correctAnswer,
+    justification: String(q.justification || q.justificativa || '').trim(),
+  };
+}
+
+function builderPoolApproved(p) {
+  return p.reviewStatus === 'approved' || (!p.reviewStatus && p.inProva);
+}
+
+function builderRenderMidias() {
+  const grid = document.getElementById('bd-midias-grid');
+  const badge = document.getElementById('bd-midias-count');
+  if (!grid) return;
+  const items = st.cloudImageIndex || [];
+  const approvedN = Object.values(st.builderMediaDrafts || {}).filter((d) => d.reviewStatus === 'approved').length;
+  if (badge) badge.textContent = items.length ? `${items.length} · ${approvedN} aprovada(s)` : '0';
+  if (!items.length) {
+    grid.innerHTML = '<div class="bd-empty">Nenhuma mídia na nuvem. Adicione em Minhas mídias.</div>';
+    return;
+  }
+  grid.innerHTML = items
+    .slice(0, 48)
+    .map((img) => {
+      const draft = st.builderMediaDrafts?.[img.imageId];
+      const thumb = img.previewUrl || '';
+      const pid = escAttr(img.imageId);
+      const title = escHtml((img.title || img.caption || 'Figura').slice(0, 56));
+      const review = builderMediaDraftHtml(img.imageId, draft, img);
+      const genDisabled = draft?.loading ? ' disabled' : '';
+      return `
+      <article class="bd-media-card">
+        <div class="bd-media-card-top">
+          <div class="bd-media-thumb">${thumb ? `<img src="${thumb}" alt="" loading="lazy">` : '<span>🖼</span>'}</div>
+          <div class="bd-media-meta">
+            <div class="bd-media-title">${title}</div>
+            <button type="button" class="btn-ir bd-media-gen-btn"${genDisabled} onclick="builderGenerateMediaExercise('${pid}')">✦ Gerar exercício (IA)</button>
+          </div>
+        </div>
+        ${review}
+      </article>`;
+    })
+    .join('');
+}
+
+async function builderGenerateMediaExercise(imageId) {
+  builderSyncFields();
+  if (!v('bd-disc') && !v('f-disc')) {
+    toast('Preencha disciplina no passo ①.', 'err');
+    return;
+  }
+  st.builderMediaDrafts = st.builderMediaDrafts || {};
+  st.builderMediaDrafts[imageId] = { loading: true, reviewStatus: 'pending' };
+  builderRenderMidias();
+  try {
+    const { block, image, question } = await fetchAndBuildImageQuestion(imageId);
+    const norm = builderNormalizeApiQuestion(question, 0);
+    st.builderMediaDrafts[imageId] = {
+      question: {
+        statement: norm.statement,
+        alternatives: norm.alternatives,
+        correctAnswer: norm.correctAnswer,
+        justification: norm.justification,
+        type: norm.type,
+      },
+      reviewStatus: 'pending',
+      type: norm.type,
+      blockId: block.blockId,
+    };
+    toast('Exercício gerado — revise e aprove abaixo.', 'ok', 4500);
+  } catch (e) {
+    delete st.builderMediaDrafts[imageId];
+    toast(humanizeIaApiError(e.message), 'err', 7000);
+  }
+  builderRenderMidias();
+}
+
+async function builderApproveMediaExercise(imageId) {
+  const draft = st.builderMediaDrafts?.[imageId];
+  if (!draft?.question?.statement) {
+    toast('Gere o exercício antes de aprovar.', 'err');
+    return;
+  }
+  draft.reviewStatus = 'approved';
+  const block = st.imageQuestionBlocks.find((b) => b.imageId === imageId);
+  const image =
+    getCloudImageEntry(imageId) || (st.cloudImageIndex || []).find((i) => i.imageId === imageId);
+  if (block && image) {
+    block.question = {
+      ...draft.question,
+      type: draft.type === 'discursive' ? 'discursive' : 'multiple_choice',
+    };
+    await persistSavedExercise(block, image);
+  }
+  st.builderSelectedMedia.add(imageId);
+  if (st.builderPagesConfirmed) {
+    builderSyncPoolFromSelections();
+    builderRenderPool();
+  }
+  builderRenderMidias();
+  builderRenderExercises();
+  toast('Exercício aprovado — revise na seção ⑥ para incluir na prova.', 'ok', 5000);
+}
+
+function builderRejectMediaExercise(imageId) {
+  if (st.builderMediaDrafts?.[imageId]) {
+    st.builderMediaDrafts[imageId].reviewStatus = 'rejected';
+  }
+  st.builderSelectedMedia.delete(imageId);
+  st.builderPool = (st.builderPool || []).filter((p) => p.id !== `bmed-${imageId}`);
+  const block = st.imageQuestionBlocks.find((b) => b.imageId === imageId);
+  if (block) block.selected = false;
+  builderRenderMidias();
+  if (st.builderPagesConfirmed) builderRenderPool();
+  toast('Exercício rejeitado.', 'ok');
+}
+
+async function builderRegenerateMediaExercise(imageId) {
+  delete st.builderMediaDrafts[imageId];
+  st.builderSelectedMedia.delete(imageId);
+  st.builderPool = (st.builderPool || []).filter((p) => p.id !== `bmed-${imageId}`);
+  builderRenderMidias();
+  await builderGenerateMediaExercise(imageId);
+}
+
+function builderSetMediaDraftType(imageId, type) {
+  const draft = st.builderMediaDrafts?.[imageId];
+  if (!draft) return;
+  draft.type = type === 'discursive' ? 'discursive' : 'multiple_choice';
+  if (draft.question) draft.question.type = draft.type;
+  const block = st.imageQuestionBlocks.find((b) => b.imageId === imageId);
+  if (block?.question) block.question.type = draft.type;
+  builderRenderMidias();
+}
+
+function builderRenderExercises() {
+  const list = document.getElementById('bd-ex-list');
+  const badge = document.getElementById('bd-ex-count');
+  const items = st.exerciciosData || [];
+  if (badge) badge.textContent = String(items.length);
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = '<div class="bd-empty">Nenhum exercício salvo. Aprove exercícios gerados em ④ Mídias.</div>';
+    return;
+  }
+  list.innerHTML = items
+    .slice(0, 40)
+    .map((ex) => {
+      const on = st.builderSelectedExercises.has(ex.id);
+      const preview = (ex.question?.statement || '').slice(0, 120);
+      return `<div class="bd-pick-ex ${on ? 'on' : ''}" onclick="builderToggleExercise('${escHtml(ex.id)}')">
+        <span class="bd-pick-check">${on ? '✓' : ''}</span>
+        <div class="bd-pick-ex-body">
+          <div class="bd-pick-ex-title">${escHtml(ex.image_title || 'Exercício')}</div>
+          ${escHtml(preview)}${preview.length >= 120 ? '…' : ''}
+        </div>
+      </div>`;
+    })
+    .join('');
+}
+
+function builderToggleMedia(imageId) {
+  const draft = st.builderMediaDrafts?.[imageId];
+  if (draft?.reviewStatus === 'approved') {
+    builderRejectMediaExercise(imageId);
+    return;
+  }
+  void builderGenerateMediaExercise(imageId);
+}
+
+function builderToggleExercise(exId) {
+  if (st.builderSelectedExercises.has(exId)) st.builderSelectedExercises.delete(exId);
+  else st.builderSelectedExercises.add(exId);
+  builderRenderExercises();
+  builderSyncPoolFromSelections();
+  builderRenderPool();
+}
+
+function builderMapAiQuestionsToPool(questions, variant) {
+  const batch = Date.now();
+  return (questions || []).map((raw, i) => {
+    const q = builderNormalizeApiQuestion(raw, i);
+    return {
+      id: `bai-${variant}-${batch}-${i}`,
+      source: 'ai',
+      variant,
+      inProva: false,
+      reviewStatus: 'pending',
+      type: q.type,
+      title: variant === 'adaptada' ? 'IA · versão adaptada' : 'IA · turma',
+      statement: q.statement,
+      alternatives: q.alternatives,
+      correctAnswer: q.correctAnswer,
+      justification: q.justification,
+    };
+  });
+}
+
+function builderRenderPool() {
+  const pool = document.getElementById('bd-pool');
+  const summary = document.getElementById('bd-pool-summary');
+  const btnTurma = document.getElementById('bd-montar-btn');
+  const btnAdapt = document.getElementById('bd-montar-adapt-btn');
+  if (!pool) return;
+  if (!st.builderPagesConfirmed) return;
+  builderSyncPoolFromSelections();
+  const all = st.builderPool || [];
+  const tab = st.builderPoolTab || 'turma';
+  const items = all.filter((p) => {
+    if (tab === 'all') return true;
+    return (p.variant || 'turma') === tab;
+  });
+  const approvedTurma = all.filter(
+    (p) => builderPoolApproved(p) && (p.variant || 'turma') === 'turma',
+  ).length;
+  const approvedAdapt = all.filter(
+    (p) => builderPoolApproved(p) && p.variant === 'adaptada',
+  ).length;
+  const pending = all.filter((p) => (p.reviewStatus || 'pending') === 'pending').length;
+  if (summary) {
+    summary.textContent = all.length
+      ? `${all.length} sugestões · ${pending} pendentes · turma: ${approvedTurma} aprovada(s) · adaptada: ${approvedAdapt}`
+      : 'Gere questões com a IA e revise cada uma (aprovar ou rejeitar) antes de montar.';
+  }
+  if (btnTurma) {
+    btnTurma.disabled = approvedTurma === 0;
+    btnTurma.textContent = approvedTurma
+      ? `Montar prova turma (${approvedTurma})`
+      : 'Montar prova (turma)';
+  }
+  if (btnAdapt) {
+    btnAdapt.disabled = approvedAdapt === 0;
+    btnAdapt.style.display = st.builderWantAdapted || all.some((p) => p.variant === 'adaptada') ? '' : 'none';
+    btnAdapt.textContent = approvedAdapt
+      ? `Montar versão adaptada (${approvedAdapt})`
+      : 'Montar versão adaptada (individual)';
+  }
+  if (!items.length) {
+    pool.innerHTML =
+      '<div class="bd-empty">Nenhuma questão nesta aba. Gere com a IA ou inclua mídias/exercícios.</div>';
+    return;
+  }
+  const srcLabel = { ai: 'IA', exercise: 'Exercício', media: 'Mídia' };
+  const varLabel = { turma: 'Turma', adaptada: 'Adaptada' };
+  pool.innerHTML = items
+    .map((q, idx) => {
+      const status = q.reviewStatus || 'pending';
+      const isMc = q.type !== 'discursive';
+      const pid = escAttr(q.id);
+      const stmt = String(q.statement || '').trim();
+      const preview = stmt.length > 160 ? `${stmt.slice(0, 160)}…` : stmt;
+      const alts =
+        isMc && q.alternatives?.some((a) => a.text)
+          ? `<ul class="rev-alts">${q.alternatives
+              .filter((a) => a.text)
+              .map(
+                (a) =>
+                  `<li class="${a.letter === q.correctAnswer ? 'correct' : ''}"><b>${escHtml(a.letter)})</b> ${escHtml(a.text)}</li>`,
+              )
+              .join('')}</ul>`
+          : '';
+      const just = q.justification
+        ? `<div class="rev-just"><b>Gabarito / critérios:</b> ${escHtml(q.justification)}</div>`
+        : '';
+      const statusLabel =
+        status === 'approved' ? 'Aprovada' : status === 'rejected' ? 'Rejeitada' : 'Pendente';
+      return `
+      <article class="bd-pool-item rev-card rev-st-${status} ${builderPoolApproved(q) ? 'in-prova approved' : ''}" data-pool-id="${pid}">
+        <details class="bd-pool-details" open>
+          <summary class="bd-pool-summary-row">
+            <span class="rev-card-num">${idx + 1}</span>
+            <span class="bd-pool-src">${srcLabel[q.source] || q.source} · ${varLabel[q.variant] || 'Turma'}</span>
+            <span class="rev-badge ${isMc ? 'mc' : 'disc'}">${isMc ? 'Objetiva' : 'Discursiva'}</span>
+            <span class="rev-status ${status}">${statusLabel}</span>
+            <span class="bd-pool-expand-hint">Ver questão ▾</span>
+            <p class="bd-pool-preview">${escHtml(preview || '(sem enunciado)')}</p>
+          </summary>
+          <div class="rev-card-body bd-pool-body">${escHtml(stmt || '(Enunciado vazio — rejeite ou gere de novo)')}${alts}${just}</div>
+          <div class="bd-pool-type-row">
+            <label class="fl" style="margin:0;font-size:11px">Tipo na prova</label>
+            <select class="bd-pool-type-sel" onchange="builderSetPoolItemType('${pid}', this.value)">
+              <option value="multiple_choice"${isMc ? ' selected' : ''}>Múltipla escolha</option>
+              <option value="discursive"${!isMc ? ' selected' : ''}>Discursiva</option>
+            </select>
+          </div>
+          <div class="rev-card-actions">
+            <button type="button" class="btn-ir" style="flex:1;background:var(--Ga);color:var(--G);border-color:rgba(24,160,60,.25)" onclick="builderApprovePoolItem('${pid}')">✓ Aprovar</button>
+            <button type="button" class="chip" onclick="builderRejectPoolItem('${pid}')">✕ Rejeitar</button>
+            ${
+              status !== 'pending'
+                ? `<button type="button" class="chip" onclick="builderUndoPoolItem('${pid}')">↩ Desfazer</button>`
+                : ''
+            }
+          </div>
+        </details>
+      </article>`;
+    })
+    .join('');
+}
+
+function builderApprovePoolItem(id) {
+  const q = st.builderPool.find((p) => p.id === id);
+  if (!q) return;
+  q.reviewStatus = 'approved';
+  q.inProva = true;
+  builderRenderPool();
+}
+
+function builderRejectPoolItem(id) {
+  const q = st.builderPool.find((p) => p.id === id);
+  if (!q) return;
+  q.reviewStatus = 'rejected';
+  q.inProva = false;
+  builderRenderPool();
+}
+
+function builderUndoPoolItem(id) {
+  const q = st.builderPool.find((p) => p.id === id);
+  if (!q) return;
+  q.reviewStatus = 'pending';
+  q.inProva = false;
+  builderRenderPool();
+}
+
+function builderSetPoolItemType(id, type) {
+  const q = st.builderPool.find((p) => p.id === id);
+  if (!q) return;
+  q.type = type === 'discursive' ? 'discursive' : 'multiple_choice';
+  builderRenderPool();
+}
+
+function builderToggleInProva(id, checked) {
+  const q = st.builderPool.find((p) => p.id === id);
+  if (!q) return;
+  q.inProva = !!checked;
+  q.reviewStatus = checked ? 'approved' : 'pending';
+  builderRenderPool();
+}
+
+async function builderGerarQuestoes() {
+  if (!currentSession) { showView('auth'); return; }
+  if (!st.builderPagesConfirmed) {
+    toast('Confirme as páginas do livro (passo ②) antes de gerar questões.', 'err', 6000);
+    return;
+  }
+  builderSyncFields();
+  if (!v('bd-disc') || !v('bd-serie')) {
+    toast('Preencha disciplina e série.', 'err');
+    return;
+  }
+  if (!v('bd-topicos').trim()) {
+    try {
+      await ensureMaterialPdfLoaded();
+    } catch (e) {
+      toast(e.message || 'Erro ao carregar PDF', 'err', 6000);
+      return;
+    }
+  }
+  const count = builderQuestionCount();
+  const adaptNotes = (document.getElementById('bd-adapt-notas')?.value || '').trim();
+  const btn = document.getElementById('bd-btn-gerar');
+  const poolEl = document.getElementById('bd-pool');
+  if (btn) { btn.disabled = true; btn.textContent = 'Gerando…'; }
+  if (poolEl) {
+    poolEl.innerHTML =
+      '<div class="bd-empty">Extraindo páginas e gerando questões com a IA… Aguarde nesta tela.</div>';
+  }
+  try {
+    const keep = (st.builderPool || []).filter((p) => p.source !== 'ai');
+    st.builderPool = keep;
+
+    const turmaRes = await fetchQuestionSuggestions(count, false, {
+      skipPendingStore: true,
+      fromBuilder: true,
+      adapted: false,
+    });
+    st.builderPool.push(...builderMapAiQuestionsToPool(turmaRes.questions, 'turma'));
+
+    if (st.builderWantAdapted) {
+      if (poolEl) {
+        poolEl.innerHTML =
+          '<div class="bd-empty">Gerando versão adaptada (PAEE)…</div>';
+      }
+      const adaptRes = await fetchQuestionSuggestions(count, false, {
+        skipPendingStore: true,
+        fromBuilder: true,
+        adapted: true,
+        adaptationNotes: adaptNotes,
+      });
+      st.builderPool.push(...builderMapAiQuestionsToPool(adaptRes.questions, 'adaptada'));
+    }
+
+    st.pendingQuestions = [];
+    const nTurma = turmaRes.count;
+    const nAdapt = st.builderWantAdapted
+      ? st.builderPool.filter((p) => p.source === 'ai' && p.variant === 'adaptada').length
+      : 0;
+    toast(
+      st.builderWantAdapted
+        ? `${nTurma} (turma) + ${nAdapt} adaptadas — revise e aprove na lista abaixo.`
+        : `${nTurma} questões geradas — abra cada uma, aprove ou rejeite.`,
+      'ok',
+      6000,
+    );
+    builderSetPoolTab('turma');
+    builderUpdateQuestoesUI();
+    document.getElementById('bd-questoes-block')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e) {
+    toast('Erro: ' + e.message, 'err');
+  } finally {
+    if (btn) {
+      btn.disabled = !st.builderPagesConfirmed;
+      btn.textContent = '✦ Gerar questões do material';
+    }
+  }
+}
+
+async function builderMontarProva(variant) {
+  const vnt = variant === 'adaptada' ? 'adaptada' : 'turma';
+  builderSyncFields();
+  builderSyncPoolFromSelections();
+  const items = (st.builderPool || []).filter(
+    (p) => builderPoolApproved(p) && (p.variant || 'turma') === vnt,
+  );
+  if (!items.length) {
+    toast(
+      vnt === 'adaptada'
+        ? 'Aprove ao menos uma questão na aba Versão adaptada.'
+        : 'Aprove ao menos uma questão na aba Turma.',
+      'err',
+    );
+    return;
+  }
+  const btn = vnt === 'adaptada' ? document.getElementById('bd-montar-adapt-btn') : document.getElementById('bd-montar-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Montando…'; }
+  try {
+    if (vnt === 'turma') {
+      st.imageQuestionBlocks = st.imageQuestionBlocks.map((b) => ({ ...b, selected: false }));
+    }
+    const provaLines = [];
+    const gabLines = [];
+    if (vnt === 'adaptada') {
+      provaLines.push('AVALIAÇÃO ADAPTADA — USO INDIVIDUAL (PAEE / INCLUSÃO)');
+      provaLines.push('(Mesmos objetivos da turma, com adaptações de acessibilidade.)');
+      provaLines.push('');
+    }
+    let n = 1;
+    for (const q of items) {
+      if (vnt === 'turma' && q.imageId && (q.source === 'exercise' || q.source === 'media')) {
+        const ex = q.source === 'exercise' ? (st.exerciciosData || []).find((x) => x.id === q.exerciseId) : null;
+        if (ex) {
+          const block = await exerciseToBlock(ex);
+          block.selected = true;
+          upsertImageBlock(block);
+        } else {
+          await useCloudImageInBuilder(q.imageId, { silent: true });
+          let block = st.imageQuestionBlocks.find((b) => b.imageId === q.imageId);
+          if (!block) {
+            block = {
+              blockId: `block_${q.imageId}_${Date.now()}`,
+              selected: true,
+              imageId: q.imageId,
+              image: getImageCatalogEntry(q.imageId),
+              question: q.alternatives?.length
+                ? { statement: q.statement, alternatives: q.alternatives, correctAnswer: q.correctAnswer }
+                : null,
+            };
+            upsertImageBlock(block);
+          } else {
+            block.selected = true;
+            if (q.alternatives?.length) block.question = { statement: q.statement, alternatives: q.alternatives, correctAnswer: q.correctAnswer };
+          }
+        }
+        if (q.statement && !/^\(Figura na prova/i.test(q.statement)) {
+          provaLines.push(formatReviewQuestionProva(q, n));
+          gabLines.push(formatReviewQuestionGabarito(q, n));
+          n++;
+        }
+      } else {
+        provaLines.push(formatReviewQuestionProva(q, n));
+        gabLines.push(formatReviewQuestionGabarito(q, n));
+        n++;
+      }
+    }
+    st.provaText = provaLines.join('\n\n');
+    st.gabText = gabLines.join('\n');
+    document.getElementById('prova-text').value = st.provaText;
+    document.getElementById('gab-text').value = st.gabText;
+    document.getElementById('badge-saved').style.display = 'none';
+    st.currentProvaId = null;
+    st.numQ = n - 1;
+    showView('result');
+    rTab('preview');
+    scheduleExamPreview();
+    renderExamVisualBuilder();
+    saveDraft();
+    const tipoLabel = vnt === 'adaptada' ? ' (adaptada)' : '';
+    const saved = await saveProva(v('f-disc'), v('f-serie') + tipoLabel);
+    if (!saved.ok) toast('Prova montada, mas não salva: ' + saved.error, 'err', 6000);
+    else toast(vnt === 'adaptada' ? 'Versão adaptada montada.' : 'Prova da turma montada.', 'ok', 4000);
+  } catch (e) {
+    toast('Erro ao montar: ' + (e.message || e), 'err', 6000);
+  } finally {
+    if (btn) builderRenderPool();
+  }
+}
+
+async function initBuilderView() {
+  if (!currentSession) return;
+  builderLoadFields();
+  try {
+    await fetchMaterialsList();
+  } catch (e) {
+    console.warn('materials', e);
+  }
+  if (st.materialId && !st.bookPdf) {
+    try {
+      await ensureMaterialPdfLoaded();
+    } catch (e) {
+      console.warn('builder preload pdf', e);
+    }
+  }
+  builderRenderMaterialSelect();
+  builderRenderPageChips();
+  await loadHeadersLibrary({ silent: true });
+  builderRenderHeaderSelect();
+  if (cloudReady()) {
+    try {
+      await refreshCloudImagesDashboard();
+    } catch (e) {
+      console.warn('midias builder', e);
+    }
+  }
+  builderRenderMidias();
+  if (!st.exerciciosData?.length) await loadExercicios();
+  builderRenderExercises();
+  builderOnAdaptadaToggle();
+  builderUpdateQuestoesUI();
+  builderRenderBdCropGallery();
+  if (st.selectedPages?.size && st.bookPdf) {
+    const cropSec = document.getElementById('bd-crop-section');
+    if (cropSec) cropSec.style.display = '';
+  }
+}
+
+// ══════════════════════════════════════════════
+// CONTEÚDO + REVISÃO DE QUESTÕES
+// ══════════════════════════════════════════════
+async function buildBuilderExamContentBlock() {
+  builderSyncFields();
+  const topicos = v('bd-topicos').trim();
+  if (topicos) {
+    return `\nCONTEÚDO / TÓPICOS FORNECIDOS PELO PROFESSOR:\n${topicos}\n`;
+  }
+  const pages = [...(st.builderConfirmedPageList || [])].sort((a, b) => a - b);
+  if (!pages.length) {
+    throw new Error('Confirme as páginas do livro no passo ② antes de gerar questões.');
+  }
+  await ensureMaterialPdfLoaded();
+  const savedPages = st.selectedPages;
+  st.selectedPages = new Set(pages);
+  let pagesText = '';
+  try {
+    pagesText = await extractSelectedPages();
+  } finally {
+    st.selectedPages = savedPages;
+  }
+  const bookSources = extractSources(pagesText);
+  const sourceBlock = bookSources.length
+    ? `\nFONTES ORIGINAIS DO MATERIAL (cite EXATAMENTE assim — NUNCA use o nome do arquivo):\n${bookSources.map((s) => '• ' + s).join('\n')}\n`
+    : '';
+  if (!pagesText || pagesText.trim().length < 80) {
+    throw new Error(
+      'Pouco texto nas páginas confirmadas. Escolha outras páginas ou use conteúdo escrito.',
+    );
+  }
+  const chTitle =
+    st.bookChapters?.[st.selectedChapterIdx]?.title ||
+    v('f-cap-manual') ||
+    'Páginas confirmadas';
+  st.chapterBrief = await analyzeChapterForExam({
+    chapterTitle: chTitle,
+    pagesText,
+    pages,
+  });
+  const core = getCore();
+  if (core?.buildChapterContentBlock) {
+    return core.buildChapterContentBlock({
+      bookFileName: st.bookFileName,
+      chapterTitle: chTitle,
+      pages,
+      pagesText,
+      bookSources,
+      imageBlocksNote: 'Questões textuais para o professor marcar no Montar.',
+      brief: st.chapterBrief,
+    });
+  }
+  return `
+CONTEÚDO DO MATERIAL — ÚNICA FONTE (páginas confirmadas pelo professor):
+Livro: "${st.bookFileName || 'Material'}"
+Capítulo: ${chTitle}
+Páginas: ${pages.join(', ')}
+${sourceBlock}
+--- TEXTO ---
+${pagesText.slice(0, 28000)}
+--- FIM ---`;
+}
+
+async function buildExamContentBlock() {
+  const topicosFirst = v('f-topicos')?.trim();
+  if (topicosFirst) {
+    return `\nCONTEÚDO / TÓPICOS FORNECIDOS PELO PROFESSOR:\n${topicosFirst}\n`;
+  }
+  const src = document.getElementById('s-livro')?.classList.contains('on') ? 'livro' : 'desc';
+  if (src === 'livro') {
+    const chIdx = st.selectedChapterIdx;
+    const manCap = v('f-cap-manual');
+    const chTitle = chIdx >= 0 ? st.bookChapters[chIdx]?.title : manCap;
+    const pages = [...st.selectedPages].sort((a, b) => a - b);
+    const pagesText = await extractSelectedPages();
+    const bookSources = extractSources(pagesText);
+    const sourceBlock = bookSources.length
+      ? `\nFONTES ORIGINAIS DO MATERIAL (cite EXATAMENTE assim — NUNCA use o nome do arquivo):\n${bookSources.map((s) => '• ' + s).join('\n')}\n`
+      : '';
+    if (!pagesText || pagesText.trim().length < 80) {
+      throw new Error(
+        'Pouco texto nas páginas selecionadas. Marque as páginas (chips verdes) ou use o intervalo manual.',
+      );
+    }
+    const selectedBlocks = getSelectedImageBlocks().length;
+    const imgBlock =
+      selectedBlocks > 0
+        ? `O professor já tem ${selectedBlocks} questão(ões) com figura no builder — as sugestões são só texto.`
+        : 'Todas as sugestões são questões textuais (figuras vêm do builder do professor).';
+    st.chapterBrief = await analyzeChapterForExam({
+      chapterTitle: chTitle,
+      pagesText,
+      pages,
+    });
+    const core = getCore();
+    if (core?.buildChapterContentBlock) {
+      return core.buildChapterContentBlock({
+        bookFileName: st.bookFileName,
+        chapterTitle: chTitle || manCap || 'Material selecionado',
+        pages,
+        pagesText,
+        bookSources,
+        imageBlocksNote: imgBlock,
+        brief: st.chapterBrief,
+      });
+    }
+    return `
+CONTEÚDO DO MATERIAL — ÚNICA FONTE:
+Livro: "${st.bookFileName}"
+Capítulo: ${chTitle || manCap || 'Páginas selecionadas'}
+Páginas: ${pages.join(', ')}
+${sourceBlock}
+--- TEXTO ---
+${pagesText.slice(0, 28000)}
+--- FIM ---`;
+  }
+  const topicos = v('f-topicos').trim();
+  if (!topicos) throw new Error('Escreva os tópicos ou conteúdo na aba Descrição.');
+  return `\nCONTEÚDO / TÓPICOS FORNECIDOS PELO PROFESSOR:\n${topicos}\n`;
+}
+
+function reviewBatchCount(extra = 0) {
+  return Math.min(28, Math.max((st.numQ || 10) + extra, 3));
+}
+
+function builderQuestionCount() {
+  return Math.min(28, Math.max(3, st.numQ || 10));
+}
+
+function mapApiQuestionsToReview(items) {
+  const base = st.pendingQuestions.length;
+  return items.map((q, i) => ({
+    id: `rq-${Date.now()}-${base + i}`,
+    type: q.type === 'discursive' ? 'discursive' : 'multiple_choice',
+    statement: q.statement,
+    alternatives: q.alternatives || [],
+    correctAnswer: q.correctAnswer || '',
+    justification: q.justification || '',
+    status: 'pending',
+  }));
+}
+
+function getReviewCounts() {
+  const all = st.pendingQuestions || [];
+  return {
+    total: all.length,
+    pending: all.filter((q) => q.status === 'pending').length,
+    approved: all.filter((q) => q.status === 'approved').length,
+    rejected: all.filter((q) => q.status === 'rejected').length,
+  };
+}
+
+function updateReviewMontarBtn() {
+  const btn = document.getElementById('rev-montar-btn');
+  const n = getReviewCounts().approved;
+  if (!btn) return;
+  btn.disabled = n === 0;
+  btn.textContent = `Montar prova (${n} aprovada${n !== 1 ? 's' : ''})`;
+}
+
+function renderQuestionReview() {
+  const list = document.getElementById('rev-list');
+  const summary = document.getElementById('rev-summary');
+  const ped = document.getElementById('rev-ped-note');
+  if (!list) return;
+
+  const counts = getReviewCounts();
+  if (summary) {
+    summary.textContent = `${counts.total} sugestões · ${counts.approved} aprovadas · ${counts.rejected} rejeitadas · ${counts.pending} pendentes`;
+  }
+  if (ped) {
+    if (st.reviewPedNote) {
+      ped.style.display = '';
+      ped.textContent = st.reviewPedNote;
+    } else {
+      ped.style.display = 'none';
+      ped.textContent = '';
+    }
+  }
+
+  document.querySelectorAll('.rev-filter').forEach((btn) => {
+    btn.classList.toggle('on', btn.dataset.revFilter === (st.reviewFilter || 'all'));
+  });
+
+  const f = st.reviewFilter || 'all';
+  const items = (st.pendingQuestions || []).filter((q) => f === 'all' || q.status === f);
+
+  if (!items.length) {
+    list.innerHTML = `<div class="rev-empty" style="padding:24px;text-align:center;font-size:13px;color:var(--t3)">
+      ${counts.total ? 'Nenhuma questão neste filtro.' : 'Nenhuma sugestão ainda. Volte ao formulário e gere com a IA.'}
+    </div>`;
+    updateReviewMontarBtn();
+    return;
+  }
+
+  list.innerHTML = items
+    .map((q, idx) => {
+      const globalIdx = st.pendingQuestions.indexOf(q);
+      const isMc = q.type !== 'discursive';
+      const alts =
+        isMc && q.alternatives?.length
+          ? `<ul class="rev-alts">${q.alternatives
+              .map((a) => {
+                const ok = a.letter === q.correctAnswer;
+                return `<li class="${ok ? 'correct' : ''}"><b>${escHtml(a.letter)})</b> ${escHtml(a.text)}</li>`;
+              })
+              .join('')}</ul>`
+          : '';
+      const just = q.justification
+        ? `<div class="rev-just"><b>Gabarito / critérios:</b> ${escHtml(q.justification)}</div>`
+        : '';
+      const statusLabel =
+        q.status === 'approved' ? 'Aprovada' : q.status === 'rejected' ? 'Rejeitada' : 'Pendente';
+      return `
+      <div class="rev-card ${q.status}" data-rev-id="${escHtml(q.id)}">
+        <div class="rev-card-head">
+          <span class="rev-card-num">${idx + 1}</span>
+          <span class="rev-badge ${isMc ? 'mc' : 'disc'}">${isMc ? 'Objetiva' : 'Discursiva'}</span>
+          <span class="rev-status ${q.status}">${statusLabel}</span>
+        </div>
+        <div class="rev-card-body">${escHtml(q.statement)}${alts}${just}</div>
+        <div class="rev-card-actions">
+          <button type="button" class="btn-ir" style="flex:1;background:var(--Ga);color:var(--G);border-color:rgba(24,160,60,.25)" onclick="approveReviewQuestion('${escHtml(q.id)}')">✓ Aprovar</button>
+          <button type="button" class="chip" onclick="rejectReviewQuestion('${escHtml(q.id)}')">✕ Rejeitar</button>
+          ${
+            q.status !== 'pending'
+              ? `<button type="button" class="chip" onclick="undoReviewQuestion('${escHtml(q.id)}')">↩ Desfazer</button>`
+              : ''
+          }
+          <button type="button" class="chip evb-mini" title="Subir" onclick="moveReviewQuestion(${globalIdx},-1)">↑</button>
+          <button type="button" class="chip evb-mini" title="Descer" onclick="moveReviewQuestion(${globalIdx},1)">↓</button>
+        </div>
+      </div>`;
+    })
+    .join('');
+
+  updateReviewMontarBtn();
+}
+
+function setReviewFilter(f) {
+  st.reviewFilter = f || 'all';
+  renderQuestionReview();
+}
+
+function approveReviewQuestion(id) {
+  const q = st.pendingQuestions.find((x) => x.id === id);
+  if (q) q.status = 'approved';
+  renderQuestionReview();
+}
+
+function rejectReviewQuestion(id) {
+  const q = st.pendingQuestions.find((x) => x.id === id);
+  if (q) q.status = 'rejected';
+  renderQuestionReview();
+}
+
+function undoReviewQuestion(id) {
+  const q = st.pendingQuestions.find((x) => x.id === id);
+  if (q) q.status = 'pending';
+  renderQuestionReview();
+}
+
+function moveReviewQuestion(globalIdx, dir) {
+  const arr = st.pendingQuestions;
+  const j = globalIdx + dir;
+  if (j < 0 || j >= arr.length) return;
+  [arr[globalIdx], arr[j]] = [arr[j], arr[globalIdx]];
+  renderQuestionReview();
+}
+
+function formatReviewQuestionProva(q, num) {
+  const lines = [`${num}. ${q.statement}`];
+  if (q.type !== 'discursive' && q.alternatives?.length) {
+    q.alternatives.forEach((a) => {
+      if (a.text?.trim()) lines.push(`${a.letter}) ${a.text.trim()}`);
+    });
+  } else if (q.type === 'discursive') {
+    for (let i = 0; i < 8; i++) lines.push('______________________________________________');
+  }
+  return lines.join('\n');
+}
+
+function formatReviewQuestionGabarito(q, num) {
+  if (q.type === 'discursive') {
+    return `${num}. — ${q.justification || 'Critérios conforme enunciado.'}`;
+  }
+  const letter = (q.correctAnswer || 'a').toLowerCase();
+  const just = q.justification ? ` — ${q.justification}` : '';
+  return `${num}. ${letter}${just}`;
+}
+
+async function fetchQuestionSuggestions(count, append, opts = {}) {
+  const token = currentSession?.access_token;
+  if (!token) throw new Error('Faça login para usar a IA.');
+  const contentBlock = opts.fromBuilder
+    ? await buildBuilderExamContentBlock()
+    : await buildExamContentBlock();
+  const res = await fetch('/api/gerar-questoes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      contentBlock,
+      count,
+      metadata: getExamMetadata(),
+      bnccPrefs: getBnccPrefsFromUI(),
+      adapted: !!opts.adapted,
+      adaptationNotes: opts.adaptationNotes || '',
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  const mapped = mapApiQuestionsToReview(data.questions || []);
+  if (!mapped.length) throw new Error('Nenhuma questão retornada pela IA.');
+  if (!opts.skipPendingStore) {
+    if (append) st.pendingQuestions.push(...mapped);
+    else st.pendingQuestions = mapped;
+    if (data.pedagogicalNote) st.reviewPedNote = data.pedagogicalNote;
+  }
+  return { count: mapped.length, questions: data.questions || [], pedagogicalNote: data.pedagogicalNote };
+}
+
+async function gerarMaisQuestoes() {
+  if (!currentSession) { showView('auth'); return; }
+  showView('loading');
+  document.getElementById('load-desc').textContent = 'Gerando mais sugestões…';
+  try {
+    const r = await fetchQuestionSuggestions(Math.min(10, reviewBatchCount(2)), true);
+    const n = r.count;
+    toast(`${n} nova(s) sugestão(ões).`, 'ok');
+    showView('revisao');
+    renderQuestionReview();
+  } catch (e) {
+    showView('revisao');
+    toast('Erro: ' + e.message, 'err');
+  }
+}
+
+async function montarProvaAprovadas() {
+  const approved = (st.pendingQuestions || []).filter((q) => q.status === 'approved');
+  if (!approved.length) {
+    toast('Aprove ao menos uma questão.', 'err');
+    return;
+  }
+  const provaLines = [];
+  const gabLines = [];
+  let n = 1;
+  for (const q of approved) {
+    provaLines.push(formatReviewQuestionProva(q, n));
+    gabLines.push(formatReviewQuestionGabarito(q, n));
+    n++;
+  }
+  st.provaText = provaLines.join('\n\n');
+  st.gabText = gabLines.join('\n');
+  document.getElementById('prova-text').value = st.provaText;
+  document.getElementById('gab-text').value = st.gabText;
+  document.getElementById('badge-saved').style.display = 'none';
+  st.currentProvaId = null;
+  st.numQ = approved.length;
+  const nvEl = document.getElementById('nv');
+  if (nvEl) nvEl.textContent = st.numQ;
+  showView('result');
+  rTab('preview');
+  scheduleExamPreview();
+  renderExamVisualBuilder();
+  saveDraft();
+  const disc = v('f-disc');
+  const serie = v('f-serie');
+  const saved = await saveProva(disc, serie);
+  if (!saved.ok) toast('Prova montada, mas não foi salva: ' + saved.error, 'err', 6000);
+  else toast(`${approved.length} questão(ões) na prova. Salva em Minhas provas.`, 'ok', 4000);
+}
+
+// ══════════════════════════════════════════════
+// GENERATE — sugestões → revisão → montar prova
 // ══════════════════════════════════════════════
 async function gerarProva() {
-  const disc  = v('f-disc');
+  const disc = v('f-disc');
   const serie = v('f-serie');
-  const src   = document.getElementById('s-livro').classList.contains('on') ? 'livro' : 'desc';
-  const hasContent = src === 'livro'
-    ? (st.selectedPages.size > 0 || v('f-cap-manual').trim())
-    : v('f-topicos').trim().length > 0;
+  const src = document.getElementById('s-livro')?.classList.contains('on') ? 'livro' : 'desc';
+  const hasContent =
+    src === 'livro' ? st.selectedPages.size > 0 : v('f-topicos').trim().length > 0;
 
+  if (src === 'livro' && !st.bookPdf) {
+    toast('Envie o PDF do livro no Material ou use a aba Descrição com tópicos escritos.', 'err', 6000);
+    return;
+  }
   if (src === 'livro' && st.selectedPages.size === 0) {
-    toast('Selecione um capítulo no Material (lista de capítulos) para o sistema ler o conteúdo antes de gerar.', 'err', 6000);
+    toast('Selecione as páginas do PDF (chips verdes ou intervalo manual).', 'err', 6000);
     return;
   }
 
@@ -5470,119 +7125,92 @@ async function gerarProva() {
   document.getElementById('form-err').style.display = 'none';
 
   if (!currentSession) { showView('auth'); return; }
-  const token = currentSession.access_token;
 
   showView('loading');
   const coreTpl = getCore();
   const tplHint = coreTpl?.describeBnccMix
     ? coreTpl.describeBnccMix(coreTpl.getBnccExamTemplate(st.numQ, serie))
-    : coreTpl?.describeAvBgeoMix
-      ? coreTpl.describeAvBgeoMix(coreTpl.getAvBgeoTemplate(st.numQ, serie))
-      : '';
+    : '';
   document.getElementById('load-desc').textContent = tplHint
     ? `${disc} · ${serie} · ${tplHint}`
-    : `${disc} · ${serie} · ${st.numQ} questões`;
+    : `${disc} · ${serie} · gerando sugestões para você revisar`;
   document.getElementById('stream-prev').innerHTML = '';
-  ['tk-q','tk-words','tk-chars'].forEach(id => document.getElementById(id).textContent = '0');
 
-  // Aguarda extração de imagens terminar (máx 15s) antes de construir o prompt
   if (st.imgRendering) {
     document.getElementById('load-desc').textContent = '⏳ Aguardando extração de imagens...';
     const timeout = Date.now() + 15000;
-    await new Promise(resolve => {
+    await new Promise((resolve) => {
       const poll = setInterval(() => {
         if (!st.imgRendering || Date.now() > timeout) { clearInterval(poll); resolve(); }
       }, 300);
     });
   }
 
-  document.getElementById('load-desc').textContent =
-    `${disc} · ${serie} · Lendo capítulo e elaborando questões (AV1º BGEO)...`;
-  const { prompt: promptText } = await buildPrompt();
-  const promptImages = [];
-  let accumulated = '';
-
-  // Mostra no loading se há imagens sendo enviadas
-  const blockN = getSelectedImageBlocks().length;
-  if (blockN > 0) {
-    document.getElementById('load-desc').textContent =
-      `${disc} · ${serie} · ${st.numQ}q · ${blockN} bloco${blockN !== 1 ? 's' : ''} imagem+questão`;
-  }
-
   try {
-    const res = await fetch('/api/gerar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ prompt: promptText, images: promptImages }),
-    });
-    if (!res.ok) { const e=await res.json().catch(()=>({})); throw new Error(e.error||`HTTP ${res.status}`); }
-
-    const reader = res.body.getReader(), dec = new TextDecoder();
-    let buf = '';
-    const prev = document.getElementById('stream-prev');
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n'); buf = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const raw = line.slice(6).trim();
-        if (raw === '[DONE]') break;
-        try {
+    if (st.ciMode && st.ciPromptOverride) {
+      const token = currentSession.access_token;
+      const res = await fetch('/api/gerar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ prompt: st.ciPromptOverride, images: [] }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `HTTP ${res.status}`); }
+      let accumulated = '';
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') break;
           const p = JSON.parse(raw);
           if (p.error) throw new Error(p.error);
-          if (p.text) {
-            accumulated += p.text;
-            // Stats
-            document.getElementById('tk-chars').textContent = accumulated.length.toLocaleString('pt-BR');
-            document.getElementById('tk-words').textContent = (accumulated.match(/\S+/g)||[]).length.toLocaleString('pt-BR');
-            const qm = accumulated.match(/^\d+\./gm);
-            document.getElementById('tk-q').textContent = qm ? qm.length : 0;
-            // Stream preview
-            const tail = accumulated.slice(-800);
-            prev.innerHTML = escHtml(tail) + '<span class="cur"></span>';
-            prev.scrollTop = prev.scrollHeight;
-          }
-        } catch(e) { if(e.message!=='') throw e; }
+          if (p.text) accumulated += p.text;
+        }
       }
+      const parts = accumulated.split('---GABARITO---');
+      st.provaText = parts[0]?.trim() || accumulated;
+      st.gabText = parts[1]?.trim() || '';
+      document.getElementById('prova-text').value = st.provaText;
+      document.getElementById('gab-text').value = st.gabText;
+      showView('result');
+      rTab('preview');
+      scheduleExamPreview();
+      return;
     }
 
-    const parts = accumulated.split('---GABARITO---');
-    st.provaText = parts[0]?.trim() || accumulated;
-    st.gabText   = parts[1]?.trim() || '';
-
-    document.getElementById('prova-text').value = st.provaText;
-    document.getElementById('gab-text').value   = st.gabText;
-    document.getElementById('badge-saved').style.display = 'none';
-    st.currentProvaId = null;
-    showView('result');
-    rTab('preview');
-    scheduleExamPreview();
-
-    const examAfter = buildStateExamModel();
-    if (examAfter?.questions?.length) {
-      st.numQ = examAfter.questions.length;
-      const nvEl = document.getElementById('nv');
-      if (nvEl) nvEl.textContent = st.numQ;
-    }
-
-    // Auto-save em Minhas provas
-    saveDraft();
-    const saved = await saveProva(disc, serie);
-    if (!saved.ok) toast('Prova gerada, mas não foi salva: ' + saved.error, 'err', 6000);
-    else toast('Prova salva em Minhas provas.', 'ok', 3000);
-    setTimeout(() => exportarDocx({ auto: true }), 400);
-  } catch(e) {
+    document.getElementById('load-desc').textContent =
+      `${disc} · ${serie} · IA lendo o material e criando sugestões…`;
+    st.reviewFilter = 'all';
+    const r = await fetchQuestionSuggestions(reviewBatchCount(), false);
+    toast(`${r.count} sugestões prontas — aprove as questões que entrarão na prova.`, 'ok', 5000);
+    showView('revisao');
+    renderQuestionReview();
+  } catch (e) {
     showView(st.ciMode ? 'inteligente' : 'form');
     toast('Erro: ' + e.message, 'err');
   } finally {
-    st.ciMode = false; st.ciPromptOverride = '';
+    st.ciMode = false;
+    st.ciPromptOverride = '';
   }
 }
 
-function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escAttr(s) {
+  return String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
 function stripMd(s) {
   return String(s)
     .replace(/\*\*\*(.+?)\*\*\*/g,'$1').replace(/\*\*(.+?)\*\*/g,'$1')
@@ -7551,13 +9179,26 @@ function attachPedagiaGlobals() {
     chImgQ, chN, ciChN, ciLerSum, ciStep,
     doAuth, doLogout, switchAuth,
     exportarPdf, exportarDocx, exportarGabaritoHtml, exportarPdfHtml,
-    gerarProva, gerarClone, saveProvaManual,
+    gerarProva, gerarClone, gerarMaisQuestoes, montarProvaAprovadas,
+    setReviewFilter, approveReviewQuestion, rejectReviewQuestion, undoReviewQuestion,
+    moveReviewQuestion, selecionarIntervaloPaginas,
+    initBuilderView, builderSyncFields, builderChNumQ, builderOnMaterialChange,
+    builderApplyPages, builderOnHeaderChange, builderToggleMedia, builderToggleExercise,
+    builderGenerateMediaExercise, builderApproveMediaExercise, builderRejectMediaExercise,
+    builderRegenerateMediaExercise, builderSetMediaDraftType,
+    builderTogglePage, builderConfirmPages, builderResetPagesConfirm, builderOnTopicosInput,
+    builderOnAdaptadaToggle, builderSetPoolTab, builderGerarQuestoes, builderMontarProva,
+    builderApprovePoolItem, builderRejectPoolItem, builderUndoPoolItem, builderSetPoolItemType,
+    builderLoadCropPages, builderToggleInProva,
+    saveProvaManual,
     goTo, showView, rTab, saveCab,
     setHtab, setSrc, setDif, updateDist,
     handleTemplateFile, removeTemplate, handleBookFile,
     handleCIExam, handleCIBook, lerSum, pularSumarioUsarTodasPaginas,
     saveHeaderToLibrary, onHeaderSelectChange, deleteHeaderFromLibrary, applyHeader,
-    exportDocxTemplate, clearBuilderData, clearSavedBuilder,
+    exportDocxTemplate, clearBuilderData, clearMaterialWorkflowOnly,
+    deleteMaterialFromLibrary, renderMaterialLibrary, materialLibraryAddNew,
+    selectMaterialLibraryItem, useMaterialInMontar, clearSavedBuilder,
     onProvaTextEdit, scheduleExamPreview, refreshExamPreview,
     openProva, delProva, filterHist,
     togImgBlockCard, saveImageToBuilder, suggestQuestionForImage, togP,
