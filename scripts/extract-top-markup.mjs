@@ -1,0 +1,10 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+const p = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src/components/legacy/markup.ts');
+const s = fs.readFileSync(p, 'utf8');
+const start = s.indexOf('export const LEGACY_MARKUP = ') + 26;
+const end = s.lastIndexOf(';\n');
+const html = JSON.parse(s.slice(start, end));
+const i = html.indexOf('class="top"');
+console.log(html.substring(i, i + 900));

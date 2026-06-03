@@ -1,4 +1,5 @@
 import { OPENROUTER_API_KEY, OR_MODEL } from '@/lib/server/env';
+import { buildPedagiaMessages } from '@/lib/services/pedagogia/master-prompt';
 import { requireUser } from '@/lib/server/supabase';
 
 export const runtime = 'nodejs';
@@ -40,8 +41,8 @@ export async function POST(req: Request) {
     body: JSON.stringify({
       model: OR_MODEL,
       stream: true,
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: messageContent }],
+      max_tokens: 8192,
+      messages: buildPedagiaMessages(messageContent, 'exam_generation'),
     }),
   });
 

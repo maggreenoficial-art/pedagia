@@ -67,13 +67,16 @@ export function parseProvaText(provaText: string): ExamQuestion[] {
     const qm = t.match(/^(\d+)\.\s*([\s\S]*)/);
     if (qm) {
       if (cur) questions.push(cur);
+      let stmt = qm[2].trim();
+      const isDisc = /^\[DISCURSIVA\]/i.test(stmt);
+      if (isDisc) stmt = stmt.replace(/^\[DISCURSIVA\]\s*/i, '').trim();
       cur = {
         id: `q_txt_${qm[1]}`,
         number: parseInt(qm[1], 10),
-        type: 'multiple_choice',
-        statement: [qm[2]],
+        type: isDisc ? 'discursive' : 'multiple_choice',
+        statement: [stmt],
         alternatives: [],
-        answerLines: 0,
+        answerLines: isDisc ? 8 : 0,
       };
       continue;
     }
@@ -102,7 +105,12 @@ export function parseProvaText(provaText: string): ExamQuestion[] {
 
   for (const q of questions) {
     const stmt = q.statement.join(' ').trim();
-    q.type = inferQuestionType(q.alternatives.length, q.answerLines || 0, stmt);
+    if (q.type !== 'discursive') {
+      q.type = inferQuestionType(q.alternatives.length, q.answerLines || 0, stmt);
+    }
+    if (q.type === 'discursive' && (q.answerLines || 0) < 5) {
+      q.answerLines = Math.max(q.answerLines || 0, 8);
+    }
     q.statement = q.statement.map((s) => s.trim()).filter(Boolean);
   }
 

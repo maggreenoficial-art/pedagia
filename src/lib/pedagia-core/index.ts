@@ -7,6 +7,7 @@ export * from '@/lib/services/image-catalog/classify';
 export * from '@/lib/services/pdf-processing';
 export * from '@/lib/services/exam-generation/prompt';
 export * from '@/lib/services/exam-generation/template';
+export * from '@/lib/services/pedagogia/master-prompt';
 
 import { buildExamModel } from '@/lib/exam/buildExamModel';
 import { validateExamModel, hasBlockingIssues } from '@/lib/exam/validateExamModel';
@@ -15,7 +16,18 @@ import { renderExamDocx } from '@/lib/exam/render/docx';
 import { mergeExamIntoDocxTemplate } from '@/lib/exam/render/docxTemplateMerge';
 import { prepareHeaderImageFromDataUrl } from '@/lib/exam/render/headerImage';
 import { embedCatalogDataUris, resolveExamModelImages } from '@/lib/exam/resolveImages';
+import { getAvBgeoTemplate, describeAvBgeoMix } from '@/lib/services/exam-generation/avBgeoTemplate';
+import {
+  getBnccExamTemplate,
+  describeBnccMix,
+  buildBnccPromptBlock,
+  BNCC_DEFAULT_ORIENTACOES,
+} from '@/lib/services/exam-generation/bnccTemplate';
 import { buildTextExamPrompt } from '@/lib/services/exam-generation/prompt';
+import {
+  buildChapterContentBlock,
+  cleanFullChapterText,
+} from '@/lib/services/exam-generation/chapterContent';
 import { extractExamTemplateFromText } from '@/lib/services/exam-generation/template';
 import { classifyExtractedImage, applyClassification } from '@/lib/services/image-catalog/classify';
 import {
@@ -43,6 +55,14 @@ export const PedagiaCore = {
   resolveExamModelImages,
   embedCatalogDataUris,
   buildTextExamPrompt,
+  buildChapterContentBlock,
+  cleanFullChapterText,
+  getAvBgeoTemplate,
+  describeAvBgeoMix,
+  getBnccExamTemplate,
+  describeBnccMix,
+  buildBnccPromptBlock,
+  BNCC_DEFAULT_ORIENTACOES,
   extractExamTemplateFromText,
   classifyExtractedImage,
   applyClassification,

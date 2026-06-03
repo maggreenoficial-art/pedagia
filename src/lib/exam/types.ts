@@ -38,6 +38,10 @@ export interface ExamMetadata {
   materialId?: string;
   chapterIds?: string[];
   scopeLabel?: string;
+  /** Orientações BNCC editáveis pelo professor (prompt de geração) */
+  bnccOrientacoes?: string;
+  bnccHabilidades?: string;
+  bnccFoco?: string;
 }
 
 export interface ExamAlternative {

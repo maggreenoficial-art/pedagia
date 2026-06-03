@@ -1,13 +1,13 @@
 {
   "name": "Gerador de Provas com IA",
-  "short_name": "ProvasIA",
+  "short_name": "PedagIA",
   "description": "Crie provas escolares com Inteligência Artificial — para professores",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#0e1018",
-  "theme_color": "#d4a843",
+  "background_color": "#080808",
+  "theme_color": "#FFD200",
   "lang": "pt-BR",
   "categories": ["education", "productivity"],
   "icons": [

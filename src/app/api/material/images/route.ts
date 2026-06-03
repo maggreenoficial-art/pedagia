@@ -48,6 +48,16 @@ export async function POST(req: Request) {
     .single();
 
   if (error) {
+    if (/does not exist|relation.*chapter_images/i.test(error.message)) {
+      return NextResponse.json(
+        {
+          error:
+            'Tabela chapter_images não encontrada. Execute supabase/schema-v2-material.sql no SQL Editor.',
+          skipped: true,
+        },
+        { status: 503 },
+      );
+    }
     if (/title|source_text/i.test(error.message)) {
       const slim = { ...row };
       delete slim.title;

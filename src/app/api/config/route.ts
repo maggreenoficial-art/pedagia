@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
-import { SUPABASE_KEY, SUPABASE_URL } from '@/lib/server/env';
+import { KIE_IMAGE_MODEL, OR_MODEL, SUPABASE_KEY, SUPABASE_URL } from '@/lib/server/env';
+import { getKieConfigError, isKieConfigured } from '@/lib/server/kie-images';
+import { getOpenRouterConfigError, isOpenRouterConfigured } from '@/lib/server/openrouter';
 
 export function GET() {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -10,5 +12,19 @@ export function GET() {
       { status: 500 },
     );
   }
-  return NextResponse.json({ supabaseUrl: SUPABASE_URL, supabaseKey: SUPABASE_KEY });
+  const openRouterError = getOpenRouterConfigError();
+  const kieError = getKieConfigError();
+  return NextResponse.json({
+    supabaseUrl: SUPABASE_URL,
+    supabaseKey: SUPABASE_KEY,
+    openRouterOk: isOpenRouterConfigured(),
+    openRouterHint: openRouterError,
+    openRouterTextModel: OR_MODEL,
+    kieImageOk: isKieConfigured(),
+    kieImageHint: kieError,
+    kieImageModel: KIE_IMAGE_MODEL,
+    /** @deprecated use kieImageModel */
+    openRouterImageModel: KIE_IMAGE_MODEL,
+    openRouterImageModelError: kieError,
+  });
 }

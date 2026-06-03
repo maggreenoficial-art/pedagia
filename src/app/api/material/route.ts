@@ -9,11 +9,50 @@ export async function GET(req: Request) {
   const { data: materials, error } = await sb
     .from('materials')
     .select('*, chapters(*)')
-    .order('created_at', { ascending: false })
-    .limit(5);
+    .order('created_at', { ascending: false });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(materials || []);
+}
+
+export async function PATCH(req: Request) {
+  const auth = await requireUser(req);
+  if ('error' in auth) return auth.error;
+
+  const body = await req.json();
+  const { materialId, fileName, storagePath, totalPages } = body as {
+    materialId?: string;
+    fileName?: string;
+    storagePath?: string | null;
+    totalPages?: number;
+  };
+
+  if (!materialId) {
+    return NextResponse.json({ error: 'materialId obrigatório' }, { status: 400 });
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (fileName != null) patch.file_name = fileName;
+  if (storagePath !== undefined) patch.storage_path = storagePath;
+  if (totalPages != null) patch.total_pages = totalPages;
+
+  if (!Object.keys(patch).length) {
+    return NextResponse.json({ error: 'Nada para atualizar' }, { status: 400 });
+  }
+
+  const sb = userClient(auth.token);
+  const { data, error } = await sb
+    .from('materials')
+    .update(patch)
+    .eq('id', materialId)
+    .eq('user_id', auth.user.id)
+    .select('id')
+    .maybeSingle();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (!data) return NextResponse.json({ error: 'Material não encontrado' }, { status: 404 });
+
+  return NextResponse.json({ ok: true, materialId });
 }
 
 export async function POST(req: Request) {
@@ -24,6 +63,20 @@ export async function POST(req: Request) {
   const { fileName, storagePath, totalPages, chapters, materialId } = body;
 
   const sb = userClient(auth.token);
+
+  if (materialId && !chapters && (storagePath !== undefined || fileName || totalPages != null)) {
+    const patch: Record<string, unknown> = {};
+    if (fileName) patch.file_name = fileName;
+    if (storagePath !== undefined) patch.storage_path = storagePath;
+    if (totalPages != null) patch.total_pages = totalPages;
+    const { error } = await sb
+      .from('materials')
+      .update(patch)
+      .eq('id', materialId)
+      .eq('user_id', auth.user.id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, materialId });
+  }
 
   if (materialId && chapters) {
     for (const ch of chapters as Array<Record<string, unknown>>) {

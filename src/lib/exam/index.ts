@@ -6,3 +6,4 @@ export * from './resolveImages';
 export { renderExamHtml, renderGabaritoHtml } from './render/html';
 export { renderExamDocx } from './render/docx';
 export { mergeExamIntoDocxTemplate } from './render/docxTemplateMerge';
+export { getAvBgeoTemplate, describeAvBgeoMix } from '@/lib/services/exam-generation/avBgeoTemplate';

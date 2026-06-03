@@ -68,3 +68,26 @@ ALTER TABLE public.provas ADD COLUMN IF NOT EXISTS exam_model JSONB;
 
 ALTER TABLE public.chapter_images ADD COLUMN IF NOT EXISTS title TEXT;
 ALTER TABLE public.chapter_images ADD COLUMN IF NOT EXISTS source_text TEXT;
+
+-- ── Exercícios salvos (questões sugeridas pela IA) ─────────────
+CREATE TABLE IF NOT EXISTS public.saved_exercises (
+  id            UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id       UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  image_id      TEXT        NOT NULL,
+  storage_path  TEXT,
+  image_title   TEXT,
+  page_number   INTEGER,
+  disciplina    TEXT,
+  serie         TEXT,
+  question      JSONB       NOT NULL,
+  block_id      TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+ALTER TABLE public.saved_exercises ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "saved_exercises_own" ON public.saved_exercises;
+CREATE POLICY "saved_exercises_own" ON public.saved_exercises FOR ALL
+  USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+CREATE INDEX IF NOT EXISTS saved_exercises_user_idx ON public.saved_exercises (user_id, created_at DESC);

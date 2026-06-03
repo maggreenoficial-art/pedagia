@@ -85,6 +85,8 @@ CREATE POLICY "workspace_update_own"
   WITH CHECK (auth.uid() = user_id);
 
 -- ── 3. Storage bucket pedagia (imagens, PDFs, cabeçalhos) ───
+-- No Dashboard: Storage → Settings → "Global file size limit" deve ser >= limite do bucket.
+-- Plano Free costuma vir com 50 MB global; suba para 209715200 (200 MB) se os PDFs forem grandes.
 INSERT INTO storage.buckets (id, name, public, file_size_limit)
 VALUES ('pedagia', 'pedagia', false, 209715200)
 ON CONFLICT (id) DO UPDATE SET file_size_limit = 209715200;

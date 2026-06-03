@@ -22,10 +22,13 @@ export function validateExamModel(
 
   const requested = metadata.numQuestoesPedidas;
   if (requested && questions.length !== requested) {
+    const diff = Math.abs(questions.length - requested);
+    const severity =
+      diff <= 2 ? 'warning' : strict ? 'error' : 'warning';
     issues.push({
       code: 'COUNT_MISMATCH',
-      message: `Esperado ${requested} questões, encontrado ${questions.length}.`,
-      severity: strict ? 'error' : 'warning',
+      message: `Pedidas ${requested} questões, encontradas ${questions.length} (diferença de ${diff}).`,
+      severity,
     });
   }
 
@@ -50,6 +53,25 @@ export function validateExamModel(
         questionNumber: n,
         severity: 'error',
       });
+    }
+
+    if (q.type === 'discursive') {
+      if (q.alternatives.length > 0) {
+        issues.push({
+          code: 'DISC_HAS_ALTS',
+          message: `Questão ${n}: discursiva não deve ter alternativas a) b) c).`,
+          questionNumber: n,
+          severity: 'error',
+        });
+      }
+      if ((q.answerLines || 0) < 5) {
+        issues.push({
+          code: 'DISC_LINES',
+          message: `Questão ${n}: inclua linhas para resposta (mín. 5).`,
+          questionNumber: n,
+          severity: strict ? 'error' : 'warning',
+        });
+      }
     }
 
     if (q.type === 'multiple_choice') {

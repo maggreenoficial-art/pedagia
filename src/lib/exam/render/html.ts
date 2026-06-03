@@ -62,7 +62,8 @@ body { font-family: "Times New Roman", Times, serif; font-size: 10.5px; line-hei
 .questions { column-count:${opts.pdfExport ? 1 : 2}; column-gap:8px; column-rule:1px solid #000; }
 .q { break-inside:avoid; margin-bottom:8px; page-break-inside:avoid; }
 .q-img { display:block; max-width:100%; max-height:${opts.pdfExport ? 200 : 110}px; margin:4px auto 6px; object-fit:contain; }
-.alt { padding-left:8px; }`;
+.alt { padding-left:8px; }
+.ans-line { display:block; border-bottom:1px solid #000; height:14px; margin:3px 0; min-width:100%; }`;
 
   const fileHeader = headerImageUrl
     ? `<div class="exam-header-file"><img src="${headerImageUrl}" alt=""></div>`

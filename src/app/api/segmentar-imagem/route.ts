@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
-import { OPENROUTER_API_KEY, OR_MODEL } from '@/lib/server/env';
+import { toImageDataUrl } from '@/lib/server/image-mime';
+import {
+  assertOpenRouterConfigured,
+  fetchOpenRouterPedagia,
+  readOpenRouterErrorResponse,
+} from '@/lib/server/openrouter';
 import { parseSegmentImageJson } from '@/lib/server/segment-image';
 import { requireUser } from '@/lib/server/supabase';
 
@@ -7,7 +12,7 @@ export async function POST(req: Request) {
   const auth = await requireUser(req);
   if ('error' in auth) return auth.error;
 
-  const { imageBase64, pageNumber, textSourceHint } = await req.json();
+  const { imageBase64, pageNumber, textSourceHint, storagePath } = await req.json();
   if (!imageBase64) {
     return NextResponse.json({ error: 'Imagem não fornecida.' }, { status: 400 });
   }
@@ -40,39 +45,23 @@ Responda APENAS JSON válido:
 }`;
 
   try {
-    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.VERCEL_URL
-          ? `https://${process.env.VERCEL_URL}`
-          : 'http://localhost:3000',
-        'X-Title': 'PedagIA',
-      },
-      body: JSON.stringify({
-        model: OR_MODEL,
-        stream: false,
-        max_tokens: 500,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: prompt },
-              {
-                type: 'image_url',
-                image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
-              },
-            ],
-          },
-        ],
-      }),
+    assertOpenRouterConfigured();
+    const dataUrl = toImageDataUrl(String(imageBase64), storagePath || '');
+    const resp = await fetchOpenRouterPedagia({
+      task: 'segment_image',
+      stream: false,
+      max_tokens: 500,
+      temperature: 0.2,
+      user: [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: dataUrl } },
+      ],
     });
 
     if (!resp.ok) {
       return NextResponse.json(
-        { error: `OpenRouter: ${(await resp.text()).slice(0, 200)}` },
-        { status: 502 },
+        { error: await readOpenRouterErrorResponse(resp) },
+        { status: resp.status === 401 ? 503 : 502 },
       );
     }
 
@@ -91,9 +80,8 @@ Responda APENAS JSON válido:
       source_text: source,
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Erro' },
-      { status: 500 },
-    );
+    const msg = err instanceof Error ? err.message : 'Erro';
+    const config = /OPENROUTER|OpenRouter/i.test(msg);
+    return NextResponse.json({ error: msg }, { status: config ? 503 : 500 });
   }
 }

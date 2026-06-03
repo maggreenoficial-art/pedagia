@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { LEGACY_MARKUP } from '@/components/legacy/markup';
-import { bootPedagiaLegacy } from '@/lib/legacy/runtime';
+import { bootPedagiaLegacy, reconcilePedagiaSessionUi } from '@/lib/legacy/runtime';
 import { PedagiaCore } from '@/lib/pedagia-core';
 import type { PedagiaCoreApi } from '@/lib/pedagia-core';
 
@@ -19,13 +19,23 @@ declare global {
   }
 }
 
+let legacyBootStarted = false;
+
 export default function PedagiaShell() {
-  const booted = useRef(false);
   const [ready, setReady] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const markupInjected = useRef(false);
+
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el || markupInjected.current) return;
+    el.innerHTML = LEGACY_MARKUP;
+    markupInjected.current = true;
+  }, []);
 
   useEffect(() => {
-    if (booted.current) return;
-    booted.current = true;
+    if (legacyBootStarted) return;
+    legacyBootStarted = true;
 
     const w = window as unknown as Record<string, { GlobalWorkerOptions: { workerSrc: string } }>;
     const pdfjsLib = w['pdfjs-dist/build/pdf'] || w.pdfjsLib;
@@ -36,11 +46,16 @@ export default function PedagiaShell() {
 
     window.PedagiaCore = PedagiaCore;
 
+    const finishBoot = () => {
+      reconcilePedagiaSessionUi();
+      setReady(true);
+    };
+
     bootPedagiaLegacy()
-      .then(() => setReady(true))
+      .then(finishBoot)
       .catch((err) => {
         console.error('PedagIA boot:', err);
-        setReady(true);
+        finishBoot();
       });
 
     if ('serviceWorker' in navigator) {
@@ -53,6 +68,11 @@ export default function PedagiaShell() {
       }
     }
   }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    reconcilePedagiaSessionUi();
+  }, [ready]);
 
   return (
     <>
@@ -76,7 +96,7 @@ export default function PedagiaShell() {
           Carregando PedagIA…
         </div>
       )}
-      <div id="pedagia-root" dangerouslySetInnerHTML={{ __html: LEGACY_MARKUP }} />
+      <div id="pedagia-root" ref={rootRef} />
       <div id="toast" className="toast" aria-live="polite" />
       <div id="img-name-modal" className="img-modal" style={{ display: 'none' }} aria-hidden>
         <div

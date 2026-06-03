@@ -1,13 +1,19 @@
 import { NextResponse } from 'next/server';
-import { OPENROUTER_API_KEY, OR_MODEL } from '@/lib/server/env';
-import { requireUser } from '@/lib/server/supabase';
+import { toImageDataUrl } from '@/lib/server/image-mime';
+import {
+  assertOpenRouterConfigured,
+  fetchOpenRouterPedagia,
+  readOpenRouterErrorResponse,
+} from '@/lib/server/openrouter';
 import { parseSuggestQuestionJson, parseSuggestQuestionText } from '@/lib/server/suggest';
+import { requireUser } from '@/lib/server/supabase';
 
 export async function POST(req: Request) {
   const auth = await requireUser(req);
   if ('error' in auth) return auth.error;
 
-  const { imageId, imageBase64, srcHint, disc, serie, caption, pageNumber } = await req.json();
+  const { imageId, imageBase64, srcHint, disc, serie, caption, pageNumber, storagePath } =
+    await req.json();
   if (!imageId) return NextResponse.json({ error: 'imageId não fornecido.' }, { status: 400 });
   if (!imageBase64) return NextResponse.json({ error: 'Imagem não fornecida.' }, { status: 400 });
 
@@ -17,24 +23,25 @@ export async function POST(req: Request) {
     ? `Fonte visível na imagem: "${srcHint || caption}". Use EXATAMENTE essa fonte no enunciado, se aplicável.`
     : 'Sem fonte visível — NÃO invente fonte.';
 
-  const prompt = `Você é um elaborador de provas para escola estadual brasileira.
-Analise a imagem (página ${pageNumber || '?'}) e crie UMA questão de múltipla escolha para ${disciplina} — ${serie_}.
+  const prompt = `Você elabora avaliação escolar alinhada à BNCC (${disciplina} — ${serie_}).
+Analise a imagem (página ${pageNumber || '?'}) e crie UMA questão de múltipla escolha.
 
 ${fonteInfo}
 
-REGRAS OBRIGATÓRIAS:
-- A figura será impressa ACIMA do enunciado na prova — o statement é só texto (contexto + pergunta), sem descrever pixels da imagem.
+REGRAS OBRIGATÓRIAS (BNCC — avaliação escolar, NÃO estilo ENEM/vestibular):
+- A figura será impressa ACIMA do enunciado — o statement é só texto (contexto + comando), sem descrever pixels.
+- Use comandos como: "Assinale a alternativa correta", "De acordo com o gráfico/mapa", "Observe a figura e responda".
 - Responda APENAS com JSON válido (sem markdown, sem texto antes ou depois).
 - O campo "imageId" DEVE ser exatamente: "${imageId}"
 - O "statement" contextualiza e pergunta; cite a fonte no final do enunciado se houver (texto da Fonte:).
 - NUNCA use [IMAGEM], [Imagem 1] ou placeholder de imagem.
-- Exatamente 5 alternativas com letras a, b, c, d, e em minúsculas.
-- "correctAnswer" é uma letra de a a e.
+- Exatamente 5 alternativas com letras a, b, c, d, e em minúsculas (todas plausíveis; uma só correta).
+- "correctAnswer" é APENAS a letra (a, b, c, d ou e) da alternativa correta conforme a figura — varie a letra; nunca fixe sempre a mesma.
 
-Formato:
+Formato (substitua ... pelo conteúdo real; correctAnswer = letra da alternativa certa):
 {
   "imageId": "${imageId}",
-  "statement": "texto do enunciado completo em texto simples",
+  "statement": "...",
   "alternatives": [
     {"letter":"a","text":"..."},
     {"letter":"b","text":"..."},
@@ -42,43 +49,29 @@ Formato:
     {"letter":"d","text":"..."},
     {"letter":"e","text":"..."}
   ],
-  "correctAnswer": "c"
+  "correctAnswer": "a"
 }`;
 
   try {
-    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.VERCEL_URL
-          ? `https://${process.env.VERCEL_URL}`
-          : 'http://localhost:3000',
-        'X-Title': 'PedagIA',
-      },
-      body: JSON.stringify({
-        model: OR_MODEL,
-        stream: false,
-        max_tokens: 700,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: prompt },
-              {
-                type: 'image_url',
-                image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
-              },
-            ],
-          },
-        ],
-      }),
+    assertOpenRouterConfigured();
+    const resp = await fetchOpenRouterPedagia({
+      task: 'suggest_question',
+      stream: false,
+      temperature: 0.65,
+      max_tokens: 700,
+      user: [
+        { type: 'text', text: prompt },
+        {
+          type: 'image_url',
+          image_url: { url: toImageDataUrl(String(imageBase64), storagePath || '') },
+        },
+      ],
     });
 
     if (!resp.ok) {
       return NextResponse.json(
-        { error: `OpenRouter: ${(await resp.text()).slice(0, 200)}` },
-        { status: 502 },
+        { error: await readOpenRouterErrorResponse(resp) },
+        { status: resp.status === 401 ? 503 : 502 },
       );
     }
 
@@ -112,9 +105,8 @@ Formato:
       questao: parsed.statement,
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Erro' },
-      { status: 500 },
-    );
+    const msg = err instanceof Error ? err.message : 'Erro';
+    const config = /OPENROUTER_API_KEY|OpenRouter/i.test(msg);
+    return NextResponse.json({ error: msg }, { status: config ? 503 : 500 });
   }
 }

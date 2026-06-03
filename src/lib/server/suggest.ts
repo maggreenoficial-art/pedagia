@@ -19,10 +19,17 @@ export function parseSuggestQuestionJson(raw: string, imageId: string) {
         text: String(a.text || a.texto || '').trim(),
       }));
     }
-    const correct =
-      String(o.correctAnswer || o.gabarito || o.resposta || 'a')
-        .toLowerCase()
-        .replace(/[^a-e]/g, '') || 'a';
+    let correct = String(o.correctAnswer ?? o.gabarito ?? o.resposta ?? '')
+      .toLowerCase()
+      .trim();
+    const letterOnly = correct.match(/\b([a-e])\b/);
+    if (letterOnly) correct = letterOnly[1];
+    else correct = correct.replace(/[^a-e]/g, '').charAt(0) || '';
+    if (!correct && typeof o.correct === 'number') {
+      const idx = o.correct;
+      if (idx >= 0 && idx <= 4) correct = letters[idx];
+    }
+    if (!correct) correct = 'a';
     const statement = String(o.statement || o.enunciado || o.questao || '').trim();
     if (!statement) return null;
     return {

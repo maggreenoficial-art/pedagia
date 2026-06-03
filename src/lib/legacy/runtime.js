@@ -4,7 +4,7 @@
 // ══════════════════════════════════════════════
 let _sb, currentSession;
 const st = {
-  numQ: 10, dif: 'medio',
+  numQ: 18, dif: 'medio',
   // School template + biblioteca de cabeçalhos
   templateFile: null, templateKind: null,
   activeHeaderId: null,
@@ -14,6 +14,12 @@ const st = {
   bookChapters: [], selectedChapterIdx: -1, selectedPages: new Set(),
   // Image gallery — catálogo + blocos imagem+questão
   imageCatalog: [],          // [{ imageId, previewUrl, dataUri, base64, pageNumber, caption, ... }]
+  cloudImageIndex: [],       // listagem Supabase Storage …/images/
+  chapterBrief: null,        // mapa IA do capítulo (conceitos / ângulos de questão)
+  midiasFilterQuery: '',
+  midiasSelected: null,      // Set<imageId> — seleção na aba Minhas mídias
+  midiaGenCategory: 'mapa',
+  pendingGeneratedImage: null,
   imageQuestionBlocks: [],   // [{ blockId, selected, imageId, image, question }]
   extractedImages: [],       // espelho do catálogo (compat. idx)
   selectedImageIdx: new Set(), // legado — não usar na prova final
@@ -32,20 +38,468 @@ const st = {
   activeView: 'form',
   // Material indexado (arquitetura v2)
   materialId: null,
+  materialsList: [],
+  bookStoragePath: null,
   materialChapters: [],
+  sumarioSkipped: false,
   _pageSources: {},
   processedChapterId: null,
   examModel: null,
   examTemplate: null,
+  examPlanOrder: null, // ['b:imageId', 't:1', 's:0', ...]
+  evbFilter: 'all', // all | block | slot | text
 };
 
 const DRAFT_KEY = 'pgdraft';
+const VIEW_KEY = 'pgview';
+
+function saveActiveView() {
+  try {
+    if (st.activeView && st.activeView !== 'auth' && st.activeView !== 'loading') {
+      sessionStorage.setItem(VIEW_KEY, st.activeView);
+    }
+  } catch {}
+}
+
+function restoreActiveView() {
+  try {
+    const v = sessionStorage.getItem(VIEW_KEY);
+    if (v && v !== 'auth' && v !== 'loading') return v;
+  } catch {}
+  return null;
+}
+
+let _authBootstrapSettled = false;
+let _authBootstrapInProgress = false;
+let _authListenerRegistered = false;
+let _userInitiatedLogout = false;
+let _authGraceUntil = 0;
+let _supabaseUrl = '';
+let _pendingInitialSession = null;
+let _initialSessionWaiter = null;
+const _authBootWait = { timer: null, resolve: null };
+
+const PEDAGIA_AUTH_STORAGE_KEY = 'pedagia-auth';
+const PEDAGIA_SESSION_V2_KEY = 'pedagia-session-v2';
+const SESSION_BACKUP_KEY = 'pedagia-session-backup';
+let _authListenerReady = false;
+
+function authStorageAdapter() {
+  if (typeof window === 'undefined') return undefined;
+  return window.localStorage;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function persistSessionBackup(session) {
+  if (!session?.access_token || !session?.refresh_token) return;
+  const slim = {
+    access_token: session.access_token,
+    refresh_token: session.refresh_token,
+    expires_at: session.expires_at,
+    expires_in: session.expires_in,
+    token_type: session.token_type || 'bearer',
+    user: session.user,
+  };
+  const json = JSON.stringify(slim);
+  const def = supabaseDefaultStorageKey(_supabaseUrl);
+  try {
+    localStorage.setItem(PEDAGIA_SESSION_V2_KEY, json);
+    localStorage.setItem(PEDAGIA_AUTH_STORAGE_KEY, json);
+    if (def) localStorage.setItem(def, json);
+    sessionStorage.setItem(SESSION_BACKUP_KEY, json);
+  } catch (e) {
+    console.warn('PedagIA: não foi possível gravar sessão.', e);
+  }
+}
+
+function readAllStoredSessionRaws() {
+  const raws = [];
+  const push = (raw) => {
+    if (raw && typeof raw === 'string' && !raws.includes(raw)) raws.push(raw);
+  };
+  push(localStorage.getItem(PEDAGIA_SESSION_V2_KEY));
+  push(sessionStorage.getItem(SESSION_BACKUP_KEY));
+  push(localStorage.getItem(PEDAGIA_AUTH_STORAGE_KEY));
+  const def = supabaseDefaultStorageKey(_supabaseUrl);
+  if (def) push(localStorage.getItem(def));
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (/^sb-.+-auth-token/.test(key) || key.includes('pedagia') && key.includes('auth'))) {
+        push(localStorage.getItem(key));
+      }
+    }
+  } catch {}
+  return raws;
+}
+
+function migrateLegacyAuthStorage() {
+  try {
+    const def = supabaseDefaultStorageKey(_supabaseUrl);
+    const sources = [
+      sessionStorage.getItem(SESSION_BACKUP_KEY),
+      def ? localStorage.getItem(def) : null,
+      localStorage.getItem(PEDAGIA_AUTH_STORAGE_KEY),
+    ];
+    for (const key of listPersistedAuthStorageKeys()) {
+      if (key !== PEDAGIA_AUTH_STORAGE_KEY && key !== def) {
+        sources.push(localStorage.getItem(key));
+      }
+    }
+    let best = null;
+    for (const raw of sources) {
+      const s = parsePersistedSession(raw);
+      if (s) best = raw;
+    }
+    if (!best) return;
+    localStorage.setItem(PEDAGIA_SESSION_V2_KEY, best);
+    localStorage.setItem(PEDAGIA_AUTH_STORAGE_KEY, best);
+    if (def) localStorage.setItem(def, best);
+    sessionStorage.setItem(SESSION_BACKUP_KEY, best);
+  } catch {}
+}
+
+function supabaseDefaultStorageKey(url) {
+  if (!url) return null;
+  try {
+    const host = new URL(url).hostname;
+    const ref = host.split('.')[0];
+    return ref ? `sb-${ref}-auth-token` : null;
+  } catch {
+    return null;
+  }
+}
+
+function listPersistedAuthStorageKeys() {
+  const keys = [PEDAGIA_AUTH_STORAGE_KEY];
+  const def = supabaseDefaultStorageKey(_supabaseUrl);
+  if (def && !keys.includes(def)) keys.push(def);
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && /^sb-.+-auth-token/.test(key) && !keys.includes(key)) keys.push(key);
+    }
+  } catch {}
+  return keys;
+}
+
+function parsePersistedSession(raw) {
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(raw);
+    if (Array.isArray(data) && data[0]) return parsePersistedSession(JSON.stringify(data[0]));
+    let session =
+      data?.currentSession ||
+      data?.session ||
+      data?.data?.session ||
+      (data?.access_token && data?.refresh_token ? data : null);
+    if (!session?.access_token || !session?.refresh_token) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+/** Restaura sessão ANTES de registrar listeners (evita SIGNED_OUT apagar o storage). */
+async function restoreAuthOnPageLoad() {
+  if (!_sb) return null;
+  migrateLegacyAuthStorage();
+
+  for (const raw of readAllStoredSessionRaws()) {
+    const tokens = parsePersistedSession(raw);
+    if (!tokens) continue;
+    try {
+      const { data, error } = await _sb.auth.setSession({
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+      });
+      if (!error && data?.session?.user) {
+        persistSessionBackup(data.session);
+        return data.session;
+      }
+      if (error) console.warn('PedagIA setSession:', error.message);
+    } catch (e) {
+      console.warn('PedagIA setSession', e);
+    }
+  }
+
+  try {
+    const { data: { session }, error } = await _sb.auth.getSession();
+    if (!error && session?.user) {
+      persistSessionBackup(session);
+      return session;
+    }
+  } catch (e) {
+    console.warn('PedagIA getSession', e);
+  }
+
+  try {
+    const { data: { session }, error } = await _sb.auth.refreshSession();
+    if (!error && session?.user) {
+      persistSessionBackup(session);
+      return session;
+    }
+    if (error) console.warn('PedagIA refreshSession:', error.message);
+  } catch (e) {
+    console.warn('PedagIA refreshSession', e);
+  }
+
+  return null;
+}
+
+function hasPersistedAuthTokens() {
+  return readAllStoredSessionRaws().some((raw) => !!parsePersistedSession(raw));
+}
+
+async function resolveStoredSession() {
+  if (!_sb) return null;
+  try {
+    const { data: { session }, error } = await _sb.auth.getSession();
+    if (error) console.warn('PedagIA getSession:', error.message);
+    if (session?.user) return session;
+  } catch (e) {
+    console.warn('PedagIA getSession:', e);
+  }
+  return null;
+}
+
+async function tryRestoreSessionFromStorage() {
+  if (!_sb) return null;
+  const keys = listPersistedAuthStorageKeys();
+  const rawBackup = sessionStorage.getItem(SESSION_BACKUP_KEY);
+  if (rawBackup) {
+    const session = parsePersistedSession(rawBackup);
+    if (session) {
+      try {
+        const { data, error } = await _sb.auth.setSession({
+          access_token: session.access_token,
+          refresh_token: session.refresh_token,
+        });
+        if (!error && data?.session?.user) return data.session;
+      } catch (e) {
+        console.warn('PedagIA setSession backup', e);
+      }
+    }
+  }
+  for (const key of keys) {
+    const raw = localStorage.getItem(key);
+    const session = parsePersistedSession(raw);
+    if (!session) continue;
+    try {
+      const { data, error } = await _sb.auth.setSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      });
+      if (!error && data?.session?.user) return data.session;
+    } catch (e) {
+      console.warn('PedagIA setSession', key, e);
+    }
+  }
+  return null;
+}
+
+async function recoverSessionWithRefresh() {
+  if (!_sb) return null;
+  let session = await resolveStoredSession();
+  if (session?.user) return session;
+  session = await tryRestoreSessionFromStorage();
+  if (session?.user) return session;
+  try {
+    const { data: { session: refreshed }, error } = await _sb.auth.refreshSession();
+    if (!error && refreshed?.user) return refreshed;
+  } catch (e) {
+    console.warn('PedagIA refreshSession:', e);
+  }
+  return null;
+}
+
+async function resolveSessionForBootstrap() {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    let session = await resolveStoredSession();
+    if (session?.user) return session;
+    if (attempt === 0 || attempt % 4 === 0) {
+      session = await tryRestoreSessionFromStorage();
+      if (session?.user) return session;
+    }
+    if (attempt === 2) {
+      session = await recoverSessionWithRefresh();
+      if (session?.user) return session;
+    }
+    if (!hasPersistedAuthTokens()) break;
+    await sleep(150);
+  }
+  return null;
+}
+
+function applySessionIfNeeded(session) {
+  if (!session?.user) return;
+  _userInitiatedLogout = false;
+  persistSessionBackup(session);
+  if (!currentSession) onLogin(session, { skipTplToast: true });
+  else currentSession = session;
+}
+
+function isAuthGracePeriod() {
+  return Date.now() < _authGraceUntil || _authBootstrapInProgress;
+}
+
+function waitForInitialAuthEvent(timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    if (_pendingInitialSession !== null) {
+      resolve(_pendingInitialSession);
+      return;
+    }
+    _initialSessionWaiter = resolve;
+    setTimeout(() => {
+      if (_initialSessionWaiter === resolve) {
+        _initialSessionWaiter = null;
+        resolve(_pendingInitialSession);
+      }
+    }, timeoutMs);
+  });
+}
+
+async function confirmSignedOut() {
+  if (!_userInitiatedLogout) return;
+  _userInitiatedLogout = false;
+  try {
+    sessionStorage.removeItem(SESSION_BACKUP_KEY);
+    localStorage.removeItem(PEDAGIA_SESSION_V2_KEY);
+  } catch {}
+  onLogout();
+}
+
+function finishAuthBootstrapWait() {
+  if (_authBootWait.timer) {
+    clearTimeout(_authBootWait.timer);
+    _authBootWait.timer = null;
+  }
+  const done = _authBootWait.resolve;
+  _authBootWait.resolve = null;
+  if (done) done();
+}
+
+function showAuthResolvingShell() {
+  const topBar = document.getElementById('top-bar');
+  const mainWrap = document.getElementById('main-wrap');
+  const viewAuth = document.getElementById('view-auth');
+  if (topBar) topBar.style.display = 'none';
+  if (mainWrap) mainWrap.style.display = 'none';
+  if (viewAuth) {
+    viewAuth.style.display = '';
+    const err = document.getElementById('auth-err');
+    if (err) {
+      err.style.display = '';
+      err.style.color = 'var(--t2)';
+      err.textContent = 'Restaurando sua sessão…';
+    }
+  }
+}
+
+function registerAuthListener() {
+  if (_authListenerRegistered || !_sb) return;
+  _authListenerRegistered = true;
+
+  _sb.auth.onAuthStateChange((event, session) => {
+    if (!_authListenerReady) return;
+
+    if (session?.user) {
+      persistSessionBackup(session);
+      applySessionIfNeeded(session);
+      return;
+    }
+
+    if (event === 'SIGNED_OUT' && _userInitiatedLogout) {
+      void confirmSignedOut();
+      return;
+    }
+
+    if (event === 'TOKEN_REFRESH_FAILED' && hasPersistedAuthTokens()) {
+      void recoverSessionWithRefresh().then((s) => {
+        if (s?.user) applySessionIfNeeded(s);
+      });
+    }
+  });
+}
+
+async function ensureFreshSession() {
+  if (!_sb) return !!currentSession?.access_token;
+  const session = await recoverSessionWithRefresh();
+  if (!session?.access_token) return false;
+  currentSession = session;
+  return true;
+}
+
+async function bootstrapAuthSession() {
+  if (!_sb) return;
+
+  _authBootstrapInProgress = true;
+  _authListenerReady = false;
+  try {
+    const session = await restoreAuthOnPageLoad();
+
+    if (typeof _sb.auth.startAutoRefresh === 'function') {
+      try { _sb.auth.startAutoRefresh(); } catch {}
+    }
+
+    _authListenerReady = true;
+    registerAuthListener();
+
+    _authBootstrapSettled = true;
+    const err = document.getElementById('auth-err');
+    if (session?.user) {
+      if (err) err.style.display = 'none';
+      onLogin(session, { skipTplToast: true });
+      return;
+    }
+    showLoggedOutShell();
+    if (hasPersistedAuthTokens() && err) {
+      err.style.display = '';
+      err.style.color = 'var(--R)';
+      err.textContent = 'Sessão expirada. Entre novamente com e-mail e senha.';
+    }
+  } finally {
+    _authBootstrapInProgress = false;
+  }
+}
+
+function createPedagiaSupabaseClient(sbLib, supabaseUrl, supabaseKey) {
+  _supabaseUrl = supabaseUrl;
+  return sbLib.createClient(supabaseUrl, supabaseKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
+function showLoggedOutShell() {
+  const err = document.getElementById('auth-err');
+  if (err) err.style.display = 'none';
+  showView('auth');
+  loadCab();
+  loadHeadersLibrary({ silent: true }).catch(() => {});
+  loadSavedBuilder({ silent: true }).catch(() => {});
+}
 
 function getCore() {
   return typeof window !== 'undefined' ? window.PedagiaCore : null;
 }
 
+function getBnccPrefsFromUI() {
+  return {
+    orientacoes: v('f-bncc-orient'),
+    habilidades: v('f-bncc-hab'),
+    focoAvaliativo: v('f-bncc-foco') || 'compreensão, aplicação e análise',
+  };
+}
+
 function getExamMetadata() {
+  const bncc = getBnccPrefsFromUI();
   return {
     disciplina: v('f-disc') || '',
     serie: v('f-serie') || '',
@@ -56,7 +510,365 @@ function getExamMetadata() {
     numQuestoesPedidas: st.numQ,
     materialId: st.materialId || undefined,
     scopeLabel: st.processedChapterId || undefined,
+    bnccOrientacoes: bncc.orientacoes,
+    bnccHabilidades: bncc.habilidades,
+    bnccFoco: bncc.focoAvaliativo,
   };
+}
+
+const BNCC_PREFS_KEY = 'pedagia_bncc_prefs';
+
+function loadBnccPrefs() {
+  const orientEl = document.getElementById('f-bncc-orient');
+  if (!orientEl) return;
+  const core = getCore();
+  const fallback = core?.BNCC_DEFAULT_ORIENTACOES || '';
+  try {
+    const raw = localStorage.getItem(BNCC_PREFS_KEY);
+    const o = raw ? JSON.parse(raw) : {};
+    if (!orientEl.value.trim()) orientEl.value = o.orientacoes || fallback;
+    const hab = document.getElementById('f-bncc-hab');
+    const foco = document.getElementById('f-bncc-foco');
+    if (hab && o.habilidades) hab.value = o.habilidades;
+    if (foco && o.focoAvaliativo) foco.value = o.focoAvaliativo;
+  } catch {
+    if (!orientEl.value.trim()) orientEl.value = fallback;
+  }
+}
+
+function onBnccPrefsChange() {
+  try {
+    localStorage.setItem(BNCC_PREFS_KEY, JSON.stringify(getBnccPrefsFromUI()));
+  } catch {}
+  scheduleExamPreview();
+}
+
+function planItemKey(item) {
+  if (item.kind === 'block') return `b:${item.imageId}`;
+  if (item.kind === 'text') return `t:${item.number}`;
+  return `s:${item.slotIndex}`;
+}
+
+function buildExamPlanItems() {
+  const items = [];
+  const blocks = st.imageQuestionBlocks.filter((b) => b.question?.statement?.trim());
+  blocks.forEach((b) => {
+    const img = b.image || getImageCatalogEntry(b.imageId) || {};
+    items.push({
+      kind: 'block',
+      imageId: b.imageId,
+      blockId: b.blockId,
+      selected: !!b.selected,
+      title: img.title || img.caption || `Figura ${b.imageId.slice(0, 8)}`,
+      preview: (b.question.statement || '').slice(0, 160),
+      typeLabel: 'Com figura (professor/IA)',
+      thumb: img.previewUrl || img.dataUri,
+    });
+  });
+
+  const textQs = st.provaText?.trim() ? parseProvaToStructured() : [];
+  textQs.forEach((q) => {
+    items.push({
+      kind: 'text',
+      number: q.number,
+      selected: true,
+      title: `Questão ${q.number} — ${q.type === 'discursive' ? 'discursiva' : 'objetiva'}`,
+      preview: (q.statement || '').slice(0, 160),
+      typeLabel: q.type === 'discursive' ? 'Discursiva (texto)' : 'Objetiva (texto)',
+      thumb: null,
+    });
+  });
+
+  const slots = Math.max(0, st.numQ - getSelectedImageBlocks().length - textQs.length);
+  for (let i = 0; i < slots; i++) {
+    items.push({
+      kind: 'slot',
+      slotIndex: i,
+      selected: true,
+      title: `Questão textual ${textQs.length + blocks.filter((x) => x.selected).length + i + 1} (IA)`,
+      preview: 'Será gerada pela IA com base no capítulo e nas orientações BNCC.',
+      typeLabel: 'A gerar · BNCC',
+      thumb: null,
+    });
+  }
+
+  const order = st.examPlanOrder;
+  if (order?.length) {
+    const map = new Map(items.map((it) => [planItemKey(it), it]));
+    const sorted = [];
+    order.forEach((k) => {
+      if (map.has(k)) {
+        sorted.push(map.get(k));
+        map.delete(k);
+      }
+    });
+    map.forEach((it) => sorted.push(it));
+    return sorted;
+  }
+  return items;
+}
+
+function syncExamPlanOrderFromItems(items) {
+  st.examPlanOrder = items.map(planItemKey);
+}
+
+function getExamPlanStats(items) {
+  const blocks = items.filter((i) => i.kind === 'block');
+  const selectedBlocks = blocks.filter((i) => i.selected).length;
+  const textCount = items.filter((i) => i.kind === 'text').length;
+  const slotCount = items.filter((i) => i.kind === 'slot').length;
+  const planned = selectedBlocks + textCount + slotCount;
+  return { blocks, selectedBlocks, textCount, slotCount, planned, total: st.numQ };
+}
+
+function evbItemMatchesFilter(it) {
+  const f = st.evbFilter || 'all';
+  if (f === 'all') return true;
+  if (f === 'block') return it.kind === 'block';
+  if (f === 'slot') return it.kind === 'slot';
+  if (f === 'text') return it.kind === 'text';
+  return true;
+}
+
+function renderEvbPlanRow(it, idx, globalIdx) {
+  const key = planItemKey(it);
+  const on = it.kind !== 'block' || it.selected;
+  const kindClass =
+    it.kind === 'block' ? 'evb-kind-fig' : it.kind === 'slot' ? 'evb-kind-ia' : 'evb-kind-txt';
+  const badge =
+    it.kind === 'block'
+      ? on
+        ? 'Na prova'
+        : 'Fora'
+      : it.kind === 'slot'
+        ? 'IA'
+        : 'Texto';
+  const thumb = it.thumb
+    ? `<img src="${it.thumb}" alt="" class="evb-item-thumb">`
+    : `<span class="evb-item-thumb-ph">${it.kind === 'slot' ? '✦' : '📝'}</span>`;
+  const toggler =
+    it.kind === 'block'
+      ? `<label class="evb-check"><input type="checkbox" ${on ? 'checked' : ''} onchange="toggleExamPlanBlock('${escHtml(it.imageId)}', this.checked)"> Incluir na prova</label>`
+      : '';
+  const actions =
+    it.kind === 'block' && !on
+      ? `<button type="button" class="chip cy evb-mini" onclick="toggleExamPlanBlock('${escHtml(it.imageId)}', true)">+ Incluir</button>`
+      : '';
+  return `
+      <div class="evb-item ${on ? 'on' : ''} ${kindClass}" data-plan-key="${escHtml(key)}" data-global-idx="${globalIdx}">
+        <div class="evb-item-num">${idx + 1}</div>
+        <div class="evb-item-thumb-wrap">${thumb}</div>
+        <div class="evb-item-body">
+          <div class="evb-item-top">
+            <span class="evb-badge">${badge}</span>
+            <span class="evb-item-title">${escHtml(it.title)}</span>
+          </div>
+          <p class="evb-item-preview">${escHtml(it.preview)}</p>
+          ${toggler}${actions}
+        </div>
+        <div class="evb-item-actions">
+          <button type="button" class="chip evb-mini" title="Subir" onclick="moveExamPlanItem(${globalIdx},-1)">↑</button>
+          <button type="button" class="chip evb-mini" title="Descer" onclick="moveExamPlanItem(${globalIdx},1)">↓</button>
+        </div>
+      </div>`;
+}
+
+function renderExamVisualBuilder() {
+  const root = document.getElementById('exam-visual-builder');
+  if (!root) return;
+  const list = document.getElementById('evb-list');
+  const summary = document.getElementById('evb-summary');
+  const status = document.getElementById('evb-status');
+  if (!list) return;
+
+  const items = buildExamPlanItems();
+  syncExamPlanOrderFromItems(items);
+  const stats = getExamPlanStats(items);
+  const pct = stats.total > 0 ? Math.min(100, Math.round((stats.planned / stats.total) * 100)) : 0;
+
+  const fill = document.getElementById('evb-progress-fill');
+  const progLabel = document.getElementById('evb-progress-label');
+  if (fill) fill.style.width = `${pct}%`;
+  if (progLabel) {
+    if (!stats.total) progLabel.textContent = 'Defina o número de questões';
+    else if (stats.planned >= stats.total)
+      progLabel.textContent = `Plano completo: ${stats.planned} de ${stats.total} questões`;
+    else
+      progLabel.textContent = `Faltam ${stats.total - stats.planned} — inclua figuras ou use Gerar prova`;
+  }
+  if (status) {
+    status.textContent = `${stats.planned}/${stats.total}`;
+    status.classList.toggle('evb-status-ok', stats.planned >= stats.total && stats.total > 0);
+  }
+
+  document.querySelectorAll('.evb-step').forEach((el) => {
+    const step = Number(el.dataset.step);
+    let on = false;
+    if (step === 1) on = stats.total > 0;
+    else if (step === 2) on = stats.blocks.length > 0;
+    else if (step === 3) on = stats.planned > 0;
+    else if (step === 4) on = stats.planned > 0 || st.provaText?.trim();
+    el.classList.toggle('on', on);
+    el.classList.toggle('done', on);
+  });
+
+  const core = getCore();
+  const mix = core?.describeBnccMix
+    ? core.describeBnccMix(core.getBnccExamTemplate(st.numQ, v('f-serie')))
+    : `${st.numQ} questões`;
+
+  if (summary) {
+    summary.innerHTML = `
+      <div class="evb-stat-grid">
+        <div class="evb-stat"><span class="evb-stat-n">${stats.selectedBlocks}</span><span class="evb-stat-l">Com figura</span></div>
+        <div class="evb-stat"><span class="evb-stat-n">${stats.slotCount}</span><span class="evb-stat-l">IA gera</span></div>
+        <div class="evb-stat"><span class="evb-stat-n">${stats.textCount}</span><span class="evb-stat-l">Já escritas</span></div>
+        <div class="evb-stat evb-stat-total"><span class="evb-stat-n">${stats.planned}/${stats.total}</span><span class="evb-stat-l">${escHtml(mix)}</span></div>
+      </div>`;
+  }
+
+  document.querySelectorAll('.evb-filter').forEach((btn) => {
+    btn.classList.toggle('on', btn.dataset.evbFilter === (st.evbFilter || 'all'));
+  });
+
+  const filtered = items.filter(evbItemMatchesFilter);
+  const groups = [
+    { id: 'block', title: 'Suas questões com figura', hint: 'De Minhas mídias ou Material — marque as que entram', items: items.filter((i) => i.kind === 'block') },
+    { id: 'slot', title: 'Serão geradas pela IA', hint: 'Preenchidas ao clicar em Gerar prova', items: items.filter((i) => i.kind === 'slot') },
+    { id: 'text', title: 'Já na prova (texto)', hint: 'Após gerar ou editar a prova', items: items.filter((i) => i.kind === 'text') },
+  ];
+
+  if (!items.length) {
+    list.innerHTML = `
+      <div class="evb-empty">
+        <p><strong>Comece assim:</strong></p>
+        <ol class="evb-empty-steps">
+          <li>Defina o <b>número de questões</b> abaixo</li>
+          <li>Em <button type="button" class="chip" onclick="goTo('midias')">Minhas mídias</button>, use <b>Sugerir questão</b></li>
+          <li>Volte aqui e marque <b>Incluir na prova</b></li>
+          <li>Toque em <b>Gerar prova</b> para completar o restante (BNCC)</li>
+        </ol>
+      </div>`;
+    return;
+  }
+
+  if (st.evbFilter !== 'all') {
+    if (!filtered.length) {
+      list.innerHTML = '<div class="exercicios-empty">Nenhum item neste filtro.</div>';
+      return;
+    }
+    list.innerHTML = filtered
+      .map((it) => {
+        const globalIdx = items.indexOf(it);
+        return renderEvbPlanRow(it, globalIdx, globalIdx);
+      })
+      .join('');
+    return;
+  }
+
+  let html = '';
+  let displayNum = 0;
+  groups.forEach((g) => {
+    if (!g.items.length) return;
+    const visible = g.items;
+    html += `<div class="evb-group">
+      <div class="evb-group-head">
+        <span class="evb-group-title">${escHtml(g.title)}</span>
+        <span class="evb-group-count">${visible.length}</span>
+      </div>
+      <p class="evb-group-hint">${escHtml(g.hint)}</p>
+      <div class="evb-group-list">`;
+    visible.forEach((it) => {
+      const globalIdx = items.indexOf(it);
+      html += renderEvbPlanRow(it, displayNum, globalIdx);
+      displayNum += 1;
+    });
+    html += '</div></div>';
+  });
+  list.innerHTML = html || '<div class="exercicios-empty">Nenhum item no plano.</div>';
+}
+
+function evbSetFilter(f) {
+  st.evbFilter = f || 'all';
+  renderExamVisualBuilder();
+}
+
+function evbSelectAllBlocks() {
+  st.imageQuestionBlocks.forEach((b) => {
+    if (b.question?.statement?.trim()) b.selected = true;
+  });
+  st.imageQuestionBlocks.forEach((b) => syncBlockCardUI(b.imageId));
+  updateBlockSelInfo();
+  scheduleSaveBuilder();
+  scheduleExamPreview();
+}
+
+function evbClearAllBlocks() {
+  st.imageQuestionBlocks.forEach((b) => {
+    b.selected = false;
+    syncBlockCardUI(b.imageId);
+  });
+  updateBlockSelInfo();
+  scheduleSaveBuilder();
+  scheduleExamPreview();
+}
+
+function evbSuggestOrder() {
+  const items = buildExamPlanItems();
+  const blocksOn = items.filter((i) => i.kind === 'block' && i.selected);
+  const blocksOff = items.filter((i) => i.kind === 'block' && !i.selected);
+  const slots = items.filter((i) => i.kind === 'slot');
+  const texts = items.filter((i) => i.kind === 'text');
+  const reordered = [...blocksOn, ...slots, ...texts, ...blocksOff];
+  syncExamPlanOrderFromItems(reordered);
+  const blockOrder = reordered.filter((i) => i.kind === 'block').map((i) => i.imageId);
+  const newBlocks = [];
+  blockOrder.forEach((id) => {
+    const b = st.imageQuestionBlocks.find((x) => x.imageId === id);
+    if (b) newBlocks.push(b);
+  });
+  st.imageQuestionBlocks.forEach((b) => {
+    if (!blockOrder.includes(b.imageId)) newBlocks.push(b);
+  });
+  st.imageQuestionBlocks = newBlocks;
+  renderExamVisualBuilder();
+  scheduleSaveBuilder();
+  scheduleExamPreview();
+  toast('Ordem sugerida: figuras → IA → texto.', 'ok', 2500);
+}
+
+function moveExamPlanItem(index, delta) {
+  const items = buildExamPlanItems();
+  const next = index + delta;
+  if (next < 0 || next >= items.length) return;
+  const tmp = items[index];
+  items[index] = items[next];
+  items[next] = tmp;
+  syncExamPlanOrderFromItems(items);
+  const blockOrder = items.filter((i) => i.kind === 'block').map((i) => i.imageId);
+  const reordered = [];
+  blockOrder.forEach((id) => {
+    const b = st.imageQuestionBlocks.find((x) => x.imageId === id);
+    if (b) reordered.push(b);
+  });
+  st.imageQuestionBlocks.forEach((b) => {
+    if (!blockOrder.includes(b.imageId)) reordered.push(b);
+  });
+  st.imageQuestionBlocks = reordered;
+  renderExamVisualBuilder();
+  scheduleSaveBuilder();
+  scheduleExamPreview();
+}
+
+function toggleExamPlanBlock(imageId, on) {
+  const b = st.imageQuestionBlocks.find((x) => x.imageId === imageId);
+  if (!b) return;
+  b.selected = !!on;
+  syncBlockCardUI(imageId);
+  updateBlockSelInfo();
+  renderExamVisualBuilder();
+  scheduleSaveBuilder();
+  scheduleExamPreview();
 }
 
 async function resolveImageB64ForCore(imageId, img) {
@@ -106,8 +918,7 @@ function getExamBuildResult() {
 // INIT + AUTH
 // ══════════════════════════════════════════════
 async function init() {
-  // PWA Service Worker
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  showAuthResolvingShell();
 
   // Load PDF.js worker
   const pdfjsLib = window['pdfjs-dist/build/pdf'] || window.pdfjsLib;
@@ -123,38 +934,44 @@ async function init() {
     if (!cfg.supabaseUrl || !cfg.supabaseKey) {
       throw new Error('Supabase não configurado no servidor (.env).');
     }
+    _supabaseUrl = cfg.supabaseUrl;
+    migrateLegacyAuthStorage();
+    if (cfg.openRouterOk === false && cfg.openRouterHint) {
+      console.warn('PedagIA — IA:', cfg.openRouterHint);
+    }
     const sbLib = window.supabase;
     if (!sbLib?.createClient) {
       throw new Error('Biblioteca Supabase não carregou. Recarregue a página (Ctrl+F5).');
     }
-    _sb = sbLib.createClient(cfg.supabaseUrl, cfg.supabaseKey);
-    attachPedagiaGlobals();
-    const { data: { session } } = await _sb.auth.getSession();
-    if (session) {
-      onLogin(session, { skipTplToast: true });
-    } else {
-      showView('auth');
-      loadCab();
-      await loadHeadersLibrary({ silent: true });
-      await loadSavedBuilder({ silent: true });
+    const w = window;
+    const clientSig = `${cfg.supabaseUrl}|${cfg.supabaseKey}`;
+    if (!w.__pedagiaSupabase || w.__pedagiaSupabaseSig !== clientSig) {
+      w.__pedagiaSupabase = createPedagiaSupabaseClient(sbLib, cfg.supabaseUrl, cfg.supabaseKey);
+      w.__pedagiaSupabaseSig = clientSig;
+      _authListenerRegistered = false;
+      _authListenerReady = false;
+      _authBootstrapSettled = false;
     }
-    _sb.auth.onAuthStateChange((ev, s) => {
-      if (s) {
-        if (!currentSession) onLogin(s);
-        else currentSession = s;
-      } else if (ev === 'SIGNED_OUT') onLogout();
-    });
+    _sb = w.__pedagiaSupabase;
+    attachPedagiaGlobals();
+    await bootstrapAuthSession();
   } catch (e) {
     console.error('PedagIA init:', e);
-    showView('auth');
-    const errEl = document.getElementById('auth-err');
-    if (errEl) {
-      errEl.textContent = e.message || 'Erro ao iniciar o app.';
-      errEl.style.display = '';
+    const recovered = _sb ? await recoverSessionWithRefresh() : null;
+    if (recovered?.user) {
+      onLogin(recovered, { skipTplToast: true });
+    } else {
+      showLoggedOutShell();
+      const errEl = document.getElementById('auth-err');
+      if (errEl) {
+        errEl.textContent = e.message || 'Erro ao iniciar o app.';
+        errEl.style.display = '';
+      }
     }
   }
 
   updateDist();
+  loadBnccPrefs();
   ['f-disc', 'f-serie', 'f-tipo', 'f-valor', 'f-bimestre'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', scheduleExamPreview);
@@ -236,11 +1053,22 @@ function onLogin(session, opts = {}) {
   loadHeadersLibrary({ silent: opts.skipTplToast }).then(ok => {
     if (ok && !opts.skipTplToast) toast('Cabeçalho restaurado.', 'ok', 3000);
   });
-  loadSavedBuilder({ silent: opts.skipTplToast });
-  if (!restoreDraft()) showView('form');
+  initMaterialsAfterLogin({ silent: opts.skipTplToast });
+  loadBnccPrefs();
+  if (!restoreDraft()) {
+    const savedView = restoreActiveView();
+    showView(savedView || 'form');
+    if (savedView === 'material') initMaterialView().catch(() => {});
+    if (savedView === 'midias') refreshMidiasPage();
+  }
+  renderExamVisualBuilder();
 }
 function onLogout() {
   currentSession = null;
+  try {
+    sessionStorage.removeItem(SESSION_BACKUP_KEY);
+    localStorage.removeItem(PEDAGIA_SESSION_V2_KEY);
+  } catch {}
   clearDraft();
   document.getElementById('top-bar').style.display = 'none';
   document.getElementById('main-wrap').style.display = 'none';
@@ -278,7 +1106,13 @@ async function doAuth() {
     }
     if (result.error) throw result.error;
     if (result.data?.session) {
-      onLogin(result.data.session);
+      _userInitiatedLogout = false;
+      persistSessionBackup(result.data.session);
+      await sleep(120);
+      const { data: { session: verified } } = await _sb.auth.getSession();
+      const sess = verified?.user ? verified : result.data.session;
+      persistSessionBackup(sess);
+      onLogin(sess);
     } else if (authMode === 'register') {
       err.style.cssText='display:block;color:#3DD86A;background:var(--Ga);border-color:rgba(24,160,60,.2)';
       err.textContent = 'Conta criada! Verifique seu e-mail para confirmar.';
@@ -292,6 +1126,7 @@ async function doAuth() {
   }
 }
 async function doLogout() {
+  _userInitiatedLogout = true;
   await _sb?.auth.signOut();
 }
 
@@ -300,19 +1135,28 @@ async function doLogout() {
 // ══════════════════════════════════════════════
 function showView(name) {
   st.activeView = name;
-  ['auth','form','material','loading','result','history','inteligente'].forEach(v => {
+  saveActiveView();
+  ['auth','form','material','midias','exercicios','loading','result','history','inteligente'].forEach(v => {
     const el = document.getElementById('view-' + v);
     if (el) el.style.display = v === name ? '' : 'none';
   });
   const gbar = document.getElementById('gbar');
-  if (gbar) gbar.style.display = (name === 'form' && currentSession) ? '' : 'none';
+  const hideChrome = name === 'auth' || name === 'loading';
+  if (gbar) gbar.style.display = !hideChrome && name === 'form' && currentSession ? '' : 'none';
+  const bottomNav = document.getElementById('bottom-nav');
+  if (bottomNav) bottomNav.style.display = !hideChrome && currentSession ? 'flex' : 'none';
   if (name === 'result') saveDraft();
+  syncNavPills(name === 'result' ? 'form' : name);
+  document.documentElement.classList.toggle('view-result-active', name === 'result');
 }
 function syncNavPills(view) {
-  const map = { form:'np-form', material:'np-material', inteligente:'np-ci', history:'np-hist' };
+  const map = { form:'np-form', material:'np-material', midias:'np-midias', exercicios:'np-exercicios', inteligente:'np-ci', history:'np-hist' };
   Object.entries(map).forEach(([v, id]) => {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('on', v === view);
+  });
+  document.querySelectorAll('.bn-item').forEach((btn) => {
+    btn.classList.toggle('on', btn.dataset.view === view);
   });
 }
 function goTo(view) {
@@ -320,6 +1164,19 @@ function goTo(view) {
   if (view === 'material') {
     showView('material');
     syncNavPills('material');
+    initMaterialView().catch((e) => console.warn('material view', e));
+    return;
+  }
+  if (view === 'midias') {
+    showView('midias');
+    syncNavPills('midias');
+    refreshMidiasPage();
+    return;
+  }
+  if (view === 'exercicios') {
+    showView('exercicios');
+    syncNavPills('exercicios');
+    loadExercicios();
     return;
   }
   if (view === 'form' && st.provaText?.trim()) {
@@ -370,7 +1227,7 @@ function chImgQ(d) {
   const el = document.getElementById('img-q-v');
   const totalEl = document.getElementById('img-q-total');
   if (!el) return;
-  const max = st.numQ || parseInt(totalEl?.textContent, 10) || 10;
+  const max = st.numQ || parseInt(totalEl?.textContent, 10) || 18;
   let n = parseInt(el.textContent, 10) || 3;
   n = Math.max(1, Math.min(max, n + d));
   el.textContent = String(n);
@@ -386,15 +1243,13 @@ function chN(d) {
 function updateDist() {
   const n = st.numQ;
   if (n < 5) { document.getElementById('dist-box').style.display='none'; return; }
-  // Proporções baseadas no documento técnico
   const t = [
-    ['Texto / trecho com fonte',    Math.max(1, Math.round(n*0.20))],
-    ['Tabela ou dado estatístico',  Math.max(1, Math.round(n*0.18))],
-    ['Gráfico ou série histórica',  Math.max(1, Math.round(n*0.18))],
-    ['Charge ou imagem descrita',   Math.max(1, Math.round(n*0.12))],
-    ['Mapa descrito',               Math.max(0, Math.round(n*0.12))],
-    ['Discursiva com fonte dupla',  Math.max(1, Math.round(n*0.12))],
-    ['Associação de colunas',       Math.max(0, Math.round(n*0.08))],
+    ['Compreensão do texto do livro', Math.max(1, Math.round(n * 0.22))],
+    ['Aplicação de conceito do capítulo', Math.max(1, Math.round(n * 0.2))],
+    ['Análise de dado/mapa do material', Math.max(1, Math.round(n * 0.18))],
+    ['Com figura do professor', Math.max(0, Math.round(n * 0.14))],
+    ['Discursiva com critérios BNCC', Math.max(1, Math.round(n * 0.14))],
+    ['Síntese / justificativa', Math.max(0, Math.round(n * 0.12))],
   ];
   // Ajusta total para bater em n
   let sum = t.reduce((a,[,v])=>a+v, 0);
@@ -402,11 +1257,14 @@ function updateDist() {
   if (diff > 0) t[0][1] += diff;
   else if (diff < 0) { for (let i=t.length-1;i>=0&&diff<0;i--) { if(t[i][1]>0){t[i][1]--;diff++;} } }
 
+  const distTitle = document.querySelector('#dist-box [style*="uppercase"]');
+  if (distTitle) distTitle.textContent = 'Distribuição sugerida (BNCC)';
   document.getElementById('dist-table').innerHTML =
     t.filter(([,v])=>v>0).map(([lbl,val])=>
       `<span style="color:var(--t2)">${lbl}</span><span style="color:var(--Y);font-weight:800;text-align:right">${val}q</span>`
     ).join('');
   document.getElementById('dist-box').style.display = '';
+  renderExamVisualBuilder();
 }
 
 // ══════════════════════════════════════════════
@@ -432,8 +1290,22 @@ function storageUserKey(prefix) {
   return currentSession?.user?.id ? `${prefix}_${currentSession.user.id}` : `${prefix}_local`;
 }
 function templateStorageKey() { return storageUserKey('tpl'); }
-function bookStorageKey() { return storageUserKey('book'); }
-function builderStorageKey() { return storageUserKey('bld'); }
+const ACTIVE_MATERIAL_KEY = 'pg_active_material';
+function activeMaterialKey() { return st.materialId || '_draft'; }
+function bookStorageKey() { return `${storageUserKey('book')}_${activeMaterialKey()}`; }
+function builderStorageKey() { return `${storageUserKey('bld')}_${activeMaterialKey()}`; }
+function getActiveMaterialStorageKey() {
+  return `${ACTIVE_MATERIAL_KEY}_${currentSession?.user?.id || 'local'}`;
+}
+function getStoredActiveMaterialId() {
+  try { return localStorage.getItem(getActiveMaterialStorageKey()) || ''; } catch { return ''; }
+}
+function setStoredActiveMaterialId(id) {
+  try {
+    if (id) localStorage.setItem(getActiveMaterialStorageKey(), id);
+    else localStorage.removeItem(getActiveMaterialStorageKey());
+  } catch {}
+}
 
 function openAppDb() {
   return new Promise((resolve, reject) => {
@@ -1106,6 +1978,7 @@ function collectBuilderSnapshot() {
     bookFileName: st.bookFileName,
     bookTotalPages: st.bookTotalPages,
     sumarioPage: parseInt(document.getElementById('pg')?.value, 10) || null,
+    sumarioSkipped: !!st.sumarioSkipped,
     bookChapters: st.bookChapters || [],
     selectedChapterIdx: st.selectedChapterIdx,
     selectedPages: [...(st.selectedPages || [])],
@@ -1118,6 +1991,8 @@ function collectBuilderSnapshot() {
       image: serializeCatalogImage(b.image || getImageCatalogEntry(b.imageId) || {}),
       question: b.question,
     })),
+    examPlanOrder: st.examPlanOrder,
+    bnccPrefs: getBnccPrefsFromUI(),
     savedAt: Date.now(),
   };
 }
@@ -1126,11 +2001,14 @@ function cloudReady() {
   return typeof PedagiaCloud !== 'undefined' && PedagiaCloud.enabled();
 }
 
-async function saveBookToStorage(file) {
-  if (cloudReady()) {
-    await PedagiaCloud.uploadBookFile(file);
-    return;
-  }
+function isCloudStorageSizeError(e) {
+  if (PedagiaCloud?.isStorageSizeError?.(e)) return true;
+  const msg = String(e?.message || e || '').toLowerCase();
+  return msg.includes('maximum allowed size') || msg.includes('maximum size exceeded') || e?.code === 'STORAGE_SIZE_LIMIT';
+}
+
+async function saveBookToLocalDb(file) {
+  if (!window.indexedDB) return false;
   const ab = await file.arrayBuffer();
   await dbPut(BOOK_STORE, bookStorageKey(), {
     name: file.name,
@@ -1138,15 +2016,58 @@ async function saveBookToStorage(file) {
     data: ab,
     savedAt: Date.now(),
   });
+  return true;
+}
+
+/** @returns {{ cloud: boolean, localOnly: boolean, local: boolean }} */
+async function saveBookToStorage(file) {
+  const local = await saveBookToLocalDb(file);
+  if (!cloudReady()) {
+    return { cloud: false, localOnly: true, local };
+  }
+  const maxMb = Math.round((PedagiaCloud.STORAGE_MAX_BYTES || 50 * 1024 * 1024) / (1024 * 1024));
+  try {
+    const res = await PedagiaCloud.uploadBookFile(file, st.materialId);
+    if (res?.path) {
+      st.bookStoragePath = res.path;
+      if (st.materialId) {
+        try {
+          await patchMaterialMeta({
+            fileName: file.name,
+            storagePath: res.path,
+            totalPages: st.bookTotalPages,
+          });
+        } catch (e) {
+          console.warn('patch material storage', e);
+        }
+      }
+    }
+    if (res?.localOnly) return { cloud: false, localOnly: true, local, maxMb };
+    return { cloud: true, localOnly: false, local };
+  } catch (e) {
+    if (isCloudStorageSizeError(e) && local) {
+      return { cloud: false, localOnly: true, local, maxMb, message: e.message };
+    }
+    throw e;
+  }
 }
 
 async function saveBuilderToStorage() {
   if (!st.bookFileName) return;
   const snap = collectBuilderSnapshot();
-  if (cloudReady()) {
-    await PedagiaCloud.saveBuilderState(snap);
-  } else if (window.indexedDB) {
+  if (window.indexedDB) {
     await dbPut(BUILDER_STORE, builderStorageKey(), snap);
+  }
+  if (cloudReady()) {
+    try {
+      await PedagiaCloud.saveBuilderState(snap, st.materialId);
+    } catch (e) {
+      if (e?.code === 'BUILDER_STATE_TOO_LARGE' || isCloudStorageSizeError(e)) {
+        console.warn('Builder na nuvem (metadados):', e.message);
+        return;
+      }
+      throw e;
+    }
   }
   const hint = document.getElementById('livro-builder-hint');
   if (hint) hint.style.display = 'block';
@@ -1167,11 +2088,38 @@ function showBookLoadedUI(fromStorage = false) {
   document.getElementById('pp2').className = 'pstep act';
 }
 
+async function migrateLegacyMaterialStorage() {
+  if (!window.indexedDB) return;
+  const legacyBookKey = storageUserKey('book');
+  const legacyBldKey = storageUserKey('bld');
+  const targetBook = bookStorageKey();
+  if (legacyBookKey === targetBook) return;
+  try {
+    const hasNew = await dbGet(BOOK_STORE, targetBook);
+    if (!hasNew?.data) {
+      const oldBook = await dbGet(BOOK_STORE, legacyBookKey);
+      if (oldBook?.data) await dbPut(BOOK_STORE, targetBook, oldBook);
+    }
+    const hasBld = await dbGet(BUILDER_STORE, builderStorageKey());
+    if (!hasBld) {
+      const oldBld = await dbGet(BUILDER_STORE, legacyBldKey);
+      if (oldBld) await dbPut(BUILDER_STORE, builderStorageKey(), oldBld);
+    }
+  } catch (e) {
+    console.warn('migrate legacy material storage', e);
+  }
+}
+
 async function loadBookFromStorage() {
   try {
+    await migrateLegacyMaterialStorage();
     if (cloudReady()) {
-      const ok = await PedagiaCloud.loadBookIntoState();
-      if (ok) { showBookLoadedUI(true); return true; }
+      try {
+        const ok = await PedagiaCloud.loadBookIntoState(st.materialId);
+        if (ok) { showBookLoadedUI(true); return true; }
+      } catch (e) {
+        console.warn('Livro na nuvem:', e);
+      }
     }
     if (!window.indexedDB) return false;
     const rec = await dbGet(BOOK_STORE, bookStorageKey());
@@ -1253,6 +2201,7 @@ async function applyBuilderSnapshot(snap) {
   st.selectedChapterIdx = snap.selectedChapterIdx ?? -1;
   st.selectedPages = new Set(snap.selectedPages || []);
 
+  st.sumarioSkipped = !!snap.sumarioSkipped;
   if (snap.sumarioPage) {
     const pgEl = document.getElementById('pg');
     if (pgEl) pgEl.value = String(snap.sumarioPage);
@@ -1282,7 +2231,29 @@ async function applyBuilderSnapshot(snap) {
     document.getElementById('pp3').querySelector('.pdot').textContent = '✓';
     document.getElementById('pp4').className = 'pstep act';
     restoreGalleryFromBuilder(snap.imageCatalog || [], snap.imageQuestionBlocks || []);
+  } else if (snap.sumarioSkipped && st.bookTotalPages) {
+    selecionarTodasPaginasDoLivro();
+    if (st.bookChapters.length) {
+      document.getElementById('step3-item').style.display = 'flex';
+      document.getElementById('pp2').className = 'pstep done';
+      document.getElementById('pp2').querySelector('.pdot').textContent = '✓';
+      document.getElementById('pp3').className = 'pstep done';
+      document.getElementById('pp3').querySelector('.pdot').textContent = '✓';
+    }
   }
+
+  if (snap.examPlanOrder) st.examPlanOrder = snap.examPlanOrder;
+  if (snap.bnccPrefs) {
+    const o = snap.bnccPrefs;
+    const orient = document.getElementById('f-bncc-orient');
+    const hab = document.getElementById('f-bncc-hab');
+    const foco = document.getElementById('f-bncc-foco');
+    if (orient && o.orientacoes) orient.value = o.orientacoes;
+    if (hab && o.habilidades) hab.value = o.habilidades;
+    if (foco && o.focoAvaliativo) foco.value = o.focoAvaliativo;
+    onBnccPrefsChange();
+  }
+  renderExamVisualBuilder();
 
   return true;
 }
@@ -1313,8 +2284,7 @@ async function loadSavedBuilder(opts = {}) {
 
     let snap = null;
     if (cloudReady()) {
-      const ws = await PedagiaCloud.getWorkspace();
-      snap = ws?.builder_state;
+      snap = await PedagiaCloud.loadBuilderState(st.materialId);
       if (snap?.imageCatalog?.length) {
         snap.imageCatalog = await PedagiaCloud.hydrateCatalog(snap.imageCatalog);
       }
@@ -1356,30 +2326,44 @@ async function clearSavedBuilder() {
 }
 
 async function clearBuilderData() {
-  if (!confirm('Remover livro, capítulos e imagens do builder (nuvem e cache local)?')) return;
-  await clearSavedBuilder();
+  const label = st.bookFileName ? ` "${st.bookFileName}"` : '';
+  if (!confirm(`Remover livro, capítulos e imagens do builder${label} (cache deste material)?`)) return;
+  if (window.indexedDB) {
+    await dbDelete(BOOK_STORE, bookStorageKey());
+    await dbDelete(BUILDER_STORE, builderStorageKey());
+  }
+  if (cloudReady() && st.materialId && typeof PedagiaCloud.saveBuilderState === 'function') {
+    try {
+      await PedagiaCloud.saveBuilderState({
+        bookFileName: st.bookFileName,
+        bookTotalPages: 0,
+        bookChapters: [],
+        selectedChapterIdx: -1,
+        selectedPages: [],
+        imageCatalog: [],
+        imageQuestionBlocks: [],
+        savedAt: Date.now(),
+      }, st.materialId);
+    } catch (e) { console.warn(e); }
+  } else {
+    await clearSavedBuilder();
+  }
   st.bookPdf = null;
   st.bookFile = null;
   st.bookFileName = '';
   st.bookTotalPages = 0;
-  st.bookChapters = [];
-  st.selectedChapterIdx = -1;
-  st.selectedPages = new Set();
-  st.imageCatalog = [];
-  st.imageQuestionBlocks = [];
-  st.extractedImages = [];
+  st.bookStoragePath = null;
+  st.materialChapters = [];
+  resetMaterialWorkflowUI();
   document.getElementById('f-livro').value = '';
   document.getElementById('livro-empty').style.display = '';
   document.getElementById('livro-loaded').style.display = 'none';
   const hint = document.getElementById('livro-builder-hint');
   if (hint) hint.style.display = 'none';
-  ['step2-item','step3-item','step4-item'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
-  });
-  document.getElementById('img-gallery').innerHTML = '';
-  document.getElementById('img-section').style.display = 'none';
-  toast('Builder limpo.', 'ok');
+  document.getElementById('pp1').className = 'pstep act';
+  document.getElementById('pp1').querySelector('.pdot').textContent = '1';
+  toast('Builder deste material limpo.', 'ok');
+  renderMaterialPicker();
 }
 
 // ══════════════════════════════════════════════
@@ -1423,10 +2407,37 @@ async function handleBookFile(input) {
     if (btn) btn.disabled = false;
 
     try {
-      await saveBookToStorage(file);
-      await saveBuilderToStorage();
-      if (!cloudReady()) toast('Faça login para salvar livro e imagens na nuvem (Supabase).', 'ok', 5000);
-      else toast(`📕 ${file.name} salvo na nuvem (${st.bookTotalPages} págs.)`, 'ok', 4500);
+      const saved = await saveBookToStorage(file);
+      try {
+        await ensureMaterialRecordForBook();
+        if (st.materialId && !st.bookStoragePath && saved.cloud === false) {
+          await patchMaterialMeta({
+            fileName: file.name,
+            totalPages: st.bookTotalPages,
+          });
+        }
+      } catch (eMat) {
+        console.warn('material record', eMat);
+      }
+      try {
+        await saveBuilderToStorage();
+      } catch (e2) {
+        toast('Capítulos/imagens: nuvem indisponível — salvos neste navegador. ' + e2.message, 'ok', 6000);
+      }
+      if (!cloudReady()) {
+        toast(`📕 ${file.name} salvo neste navegador (${st.bookTotalPages} págs.). Faça login para sincronizar na nuvem.`, 'ok', 5500);
+      } else if (saved.localOnly) {
+        const mb = saved.maxMb || 50;
+        toast(
+          `📕 ${file.name} (${st.bookTotalPages} págs.) — salvo neste navegador. O PDF passa de ${mb} MB (limite do Supabase Storage). Para nuvem: reduza o arquivo ou aumente o limite em Storage → Settings.`,
+          'ok',
+          9000,
+        );
+      } else if (saved.cloud) {
+        toast(`📕 ${file.name} salvo na nuvem e neste navegador (${st.bookTotalPages} págs.)`, 'ok', 4500);
+      } else {
+        toast(`📕 ${file.name} salvo neste navegador (${st.bookTotalPages} págs.)`, 'ok', 4500);
+      }
     } catch (e) {
       toast('Livro em uso, mas não foi possível salvar: ' + e.message, 'err', 5000);
     }
@@ -1467,6 +2478,80 @@ async function callSumarioIA(rawText) {
   return data.chapters || [];
 }
 
+function selecionarTodasPaginasDoLivro() {
+  st.selectedPages = new Set();
+  const total = st.bookTotalPages || st.bookPdf?.numPages || 0;
+  if (!total) return;
+  const pages = [];
+  for (let p = 1; p <= total; p++) {
+    pages.push(p);
+    st.selectedPages.add(p);
+  }
+  renderPageChips(pages);
+  renderPageThumbnails(pages).catch(() => {});
+  updatePgCount();
+
+  const step4 = document.getElementById('step4-item');
+  if (step4) step4.style.display = 'flex';
+  const pp3 = document.getElementById('pp3');
+  const pp4 = document.getElementById('pp4');
+  if (pp3) { pp3.className = 'pstep done'; pp3.querySelector('.pdot').textContent = '✓'; }
+  if (pp4) pp4.className = 'pstep act';
+  const imgSec = document.getElementById('img-section');
+  if (imgSec) imgSec.style.display = '';
+}
+
+async function pularSumarioUsarTodasPaginas() {
+  if (!st.bookPdf || !st.bookTotalPages) {
+    toast('Carregue o PDF do livro primeiro.', 'err');
+    return;
+  }
+
+  const btn = document.getElementById('btn-sem-sumario');
+  const status = document.getElementById('sum-status');
+  if (btn) btn.disabled = true;
+  st.sumarioSkipped = true;
+
+  const title = (st.bookFileName || 'Livro').replace(/\.pdf$/i, '') || 'Livro completo';
+  const chapters = [{ title, pageNum: 1 }];
+  st.bookChapters = chapters;
+
+  const core = getCore();
+  if (core) {
+    st.materialChapters = core.normalizeChapters(
+      [{ title, printedPageStart: 1, pdfPageStart: 1 }],
+      st.bookTotalPages,
+    );
+    if (st.materialChapters[0]) {
+      st.materialChapters[0].pdfPageEnd = st.bookTotalPages;
+    }
+    persistMaterialChapters().catch(() => {});
+  }
+
+  renderChapterList(chapters, 'chapter-list', selectChapter);
+  document.getElementById('step3-item').style.display = 'flex';
+  document.getElementById('pp2').className = 'pstep done';
+  document.getElementById('pp2').querySelector('.pdot').textContent = '✓';
+  document.getElementById('pp3').className = 'pstep act';
+
+  st.selectedChapterIdx = 0;
+  st.processedChapterId = st.materialChapters[0]?.id || null;
+  document.querySelectorAll('#chapter-list .citem').forEach((c, i) => {
+    c.classList.toggle('on', i === 0);
+  });
+
+  selecionarTodasPaginasDoLivro();
+
+  if (status) {
+    status.style.display = '';
+    status.textContent = `✅ ${st.bookTotalPages} páginas do PDF disponíveis (sem sumário)`;
+  }
+  toast(`${st.bookTotalPages} páginas prontas para recorte.`, 'ok');
+  if (btn) btn.disabled = false;
+  scheduleSaveBuilder();
+  setTimeout(() => document.getElementById('step4-item')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100);
+}
+
 async function lerSum() {
   const pageNum = parseInt(document.getElementById('pg').value);
   if (!pageNum || !st.bookPdf) { toast('Insira o número da página do sumário.', 'err'); return; }
@@ -1475,6 +2560,7 @@ async function lerSum() {
   const status = document.getElementById('sum-status');
   btn.disabled = true; btn.textContent = '⏳ IA lendo...';
   status.style.display = ''; status.textContent = '🤖 Enviando sumário para a IA...';
+  st.sumarioSkipped = false;
 
   try {
     // Extrai 3 páginas a partir da página informada (cobre sumários de 2-3 páginas)
@@ -1497,8 +2583,8 @@ async function lerSum() {
     }
 
     if (!chapters.length) {
-      status.textContent = '⚠️ IA não encontrou capítulos. Verifique a página do sumário ou use o campo manual.';
-      toast('Nenhum capítulo encontrado — tente outra página.', 'err');
+      status.textContent = '⚠️ IA não encontrou capítulos. Tente outra página ou use "Sem sumário — usar todas as páginas".';
+      toast('Nenhum capítulo encontrado — use o botão sem sumário ou outra página.', 'err');
     } else {
       status.textContent = `✅ ${chapters.length} capítulo(s) identificado(s) pela IA`;
       toast(`${chapters.length} capítulos encontrados!`, 'ok');
@@ -1561,9 +2647,355 @@ function renderChapterList(chapters, listId, onPick) {
   });
 }
 
+function normalizeMaterialRecord(row) {
+  if (!row) return null;
+  const chapters = (row.chapters || []).map(ch => ({
+    id: ch.id,
+    title: ch.title,
+    printedPageStart: ch.printed_page_start ?? ch.pdf_page_start,
+    pdfPageStart: ch.pdf_page_start,
+    pdfPageEnd: ch.pdf_page_end,
+    indexed: !!ch.indexed,
+  }));
+  return {
+    id: row.id,
+    fileName: row.file_name || 'livro.pdf',
+    storagePath: row.storage_path || null,
+    totalPages: row.total_pages || 0,
+    indexedAt: row.indexed_at,
+    chapters,
+  };
+}
+
+function chaptersToBookList(chapters) {
+  return (chapters || []).map(ch => ({
+    title: ch.title,
+    pageNum: ch.printedPageStart ?? ch.pdfPageStart,
+  }));
+}
+
+function applyMaterialChaptersToState(chapters) {
+  const core = getCore();
+  st.materialChapters = chapters || [];
+  if (core && chapters?.length) {
+    st.materialChapters = core.normalizeChapters(
+      chapters.map(ch => ({
+        id: ch.id,
+        title: ch.title,
+        printedPageStart: ch.printedPageStart,
+        pdfPageStart: ch.pdfPageStart,
+        pdfPageEnd: ch.pdfPageEnd,
+      })),
+      st.bookTotalPages || 500,
+    );
+  }
+  st.bookChapters = chaptersToBookList(st.materialChapters);
+}
+
+function renderMaterialPicker() {
+  const toolbar = document.getElementById('material-toolbar');
+  const sel = document.getElementById('material-select');
+  const hint = document.getElementById('material-toolbar-hint');
+  if (!toolbar || !sel) return;
+
+  toolbar.style.display = currentSession ? '' : 'none';
+  const items = st.materialsList || [];
+  const active = st.materialId || '';
+  const opts = [
+    '<option value="">— Novo material (upload) —</option>',
+    ...items.map(m => {
+      const label = escHtml((m.fileName || 'Material').slice(0, 56));
+      const pages = m.totalPages ? ` · ${m.totalPages} págs.` : '';
+      const ch = m.chapters?.length ? ` · ${m.chapters.length} cap.` : '';
+      return `<option value="${escHtml(m.id)}"${m.id === active ? ' selected' : ''}>${label}${pages}${ch}</option>`;
+    }),
+  ];
+  sel.innerHTML = opts.join('');
+  if (hint) {
+    if (!items.length) {
+      hint.textContent = 'Envie o primeiro PDF ou escolha um material salvo.';
+    } else if (active) {
+      const cur = items.find(m => m.id === active);
+      hint.textContent = cur
+        ? `Trabalhando em: ${cur.fileName}`
+        : 'Material ativo — faça upload do PDF se ainda não carregou.';
+    } else {
+      hint.textContent = 'Modo novo material: o próximo PDF enviado será cadastrado separadamente.';
+    }
+  }
+}
+
+async function fetchMaterialsList() {
+  if (!currentSession?.access_token) {
+    st.materialsList = [];
+    return [];
+  }
+  const r = await fetch('/api/material', {
+    headers: { Authorization: `Bearer ${currentSession.access_token}` },
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Erro ao listar materiais');
+  st.materialsList = (data || []).map(normalizeMaterialRecord).filter(Boolean);
+  return st.materialsList;
+}
+
+function upsertMaterialInList(rec) {
+  if (!rec?.id) return;
+  const idx = st.materialsList.findIndex(m => m.id === rec.id);
+  if (idx >= 0) st.materialsList[idx] = { ...st.materialsList[idx], ...rec };
+  else st.materialsList.unshift(rec);
+}
+
+async function patchMaterialMeta(patch) {
+  if (!currentSession?.access_token || !st.materialId) return;
+  const r = await fetch('/api/material', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${currentSession.access_token}`,
+    },
+    body: JSON.stringify({ materialId: st.materialId, ...patch }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Erro ao atualizar material');
+  const cur = st.materialsList.find(m => m.id === st.materialId);
+  if (cur) {
+    if (patch.fileName) cur.fileName = patch.fileName;
+    if (patch.storagePath !== undefined) cur.storagePath = patch.storagePath;
+    if (patch.totalPages != null) cur.totalPages = patch.totalPages;
+  }
+}
+
+function resetMaterialWorkflowUI() {
+  st.sumarioSkipped = false;
+  st.bookChapters = [];
+  st.selectedChapterIdx = -1;
+  st.selectedPages = new Set();
+  st.imageCatalog = [];
+  st.imageQuestionBlocks = [];
+  st.extractedImages = [];
+  st.processedChapterId = null;
+
+  const pg = document.getElementById('pg');
+  if (pg) pg.value = '';
+  const cap = document.getElementById('f-cap-manual');
+  if (cap) cap.value = '';
+  const sumSt = document.getElementById('sum-status');
+  if (sumSt) { sumSt.style.display = 'none'; sumSt.textContent = ''; }
+
+  ['step2-item', 'step3-item', 'step4-item'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  ['pp1', 'pp2', 'pp3', 'pp4'].forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = i === 0 ? 'pstep act' : 'pstep';
+    const dot = el.querySelector('.pdot');
+    if (dot) dot.textContent = String(i + 1);
+  });
+
+  const cl = document.getElementById('chapter-list');
+  if (cl) cl.innerHTML = '';
+  const chips = document.getElementById('page-chips');
+  if (chips) chips.innerHTML = '';
+  const pgCount = document.getElementById('pg-count');
+  if (pgCount) pgCount.textContent = '0 páginas selecionadas';
+  const gallery = document.getElementById('img-gallery');
+  if (gallery) gallery.innerHTML = '';
+  const imgSec = document.getElementById('img-section');
+  if (imgSec) imgSec.style.display = 'none';
+}
+
+async function flushCurrentMaterialState() {
+  if (st.bookFileName) {
+    try { await saveBuilderToStorage(); } catch (e) { console.warn('flush builder', e); }
+  }
+}
+
+async function loadMaterialWorkspace(mat) {
+  if (!mat) return false;
+  st.materialId = mat.id;
+  st.bookFileName = mat.fileName || '';
+  st.bookStoragePath = mat.storagePath || null;
+  st.bookTotalPages = mat.totalPages || 0;
+  applyMaterialChaptersToState(mat.chapters || []);
+  setStoredActiveMaterialId(mat.id);
+
+  resetMaterialWorkflowUI();
+
+  if (st.bookFileName) {
+    document.getElementById('livro-empty').style.display = 'none';
+    document.getElementById('livro-loaded').style.display = '';
+    document.getElementById('livro-fname').textContent = st.bookFileName;
+    document.getElementById('livro-pages').textContent = st.bookTotalPages
+      ? `${st.bookTotalPages} páginas`
+      : 'Carregando PDF...';
+  } else {
+    document.getElementById('livro-empty').style.display = '';
+    document.getElementById('livro-loaded').style.display = 'none';
+  }
+
+  st.bookPdf = null;
+  st.bookFile = null;
+  const hasBook = await loadBookFromStorage();
+  if (hasBook) {
+    showBookLoadedUI(true);
+    if (st.bookChapters.length) {
+      renderChapterList(st.bookChapters, 'chapter-list', selectChapter);
+      document.getElementById('step2-item').style.display = 'flex';
+      document.getElementById('step3-item').style.display = 'flex';
+      document.getElementById('pp1').className = 'pstep done';
+      document.getElementById('pp1').querySelector('.pdot').textContent = '✓';
+      document.getElementById('pp2').className = 'pstep done';
+      document.getElementById('pp2').querySelector('.pdot').textContent = '✓';
+      document.getElementById('pp3').className = 'pstep act';
+    }
+    await loadSavedBuilder({ silent: true });
+  } else if (st.bookFileName) {
+    document.getElementById('livro-pages').textContent =
+      'PDF não encontrado neste dispositivo — envie o arquivo novamente.';
+  }
+
+  renderMaterialPicker();
+  return hasBook;
+}
+
+async function switchMaterial(materialId) {
+  const nextId = materialId || '';
+  if ((st.materialId || '') === nextId) return;
+
+  await flushCurrentMaterialState();
+
+  if (!nextId) {
+    startNewMaterial({ skipFlush: true });
+    return;
+  }
+
+  let mat = st.materialsList.find(m => m.id === nextId);
+  if (!mat) {
+    try {
+      await fetchMaterialsList();
+      mat = st.materialsList.find(m => m.id === nextId);
+    } catch (e) {
+      toast(e.message, 'err');
+      renderMaterialPicker();
+      return;
+    }
+  }
+  if (!mat) {
+    toast('Material não encontrado.', 'err');
+    renderMaterialPicker();
+    return;
+  }
+
+  await loadMaterialWorkspace(mat);
+  toast(`Material: ${mat.fileName}`, 'ok', 2800);
+}
+
+function startNewMaterial(opts = {}) {
+  if (!opts.skipFlush) flushCurrentMaterialState().catch(() => {});
+  st.materialId = null;
+  st.bookStoragePath = null;
+  setStoredActiveMaterialId('');
+  st.bookPdf = null;
+  st.bookFile = null;
+  st.bookFileName = '';
+  st.bookTotalPages = 0;
+  st.materialChapters = [];
+  resetMaterialWorkflowUI();
+
+  const input = document.getElementById('f-livro');
+  if (input) input.value = '';
+  document.getElementById('livro-empty').style.display = '';
+  document.getElementById('livro-loaded').style.display = 'none';
+  const hint = document.getElementById('livro-builder-hint');
+  if (hint) hint.style.display = 'none';
+
+  renderMaterialPicker();
+  toast('Novo material — envie o PDF.', 'ok', 3200);
+}
+
+async function initMaterialView() {
+  const toolbar = document.getElementById('material-toolbar');
+  if (toolbar) toolbar.style.display = currentSession ? '' : 'none';
+  if (!currentSession) return;
+  try {
+    await fetchMaterialsList();
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+  renderMaterialPicker();
+  if (!st.materialId && st.materialsList.length) {
+    const stored = getStoredActiveMaterialId();
+    const pick = stored && st.materialsList.some(m => m.id === stored)
+      ? stored
+      : st.materialsList[0].id;
+    const mat = st.materialsList.find(m => m.id === pick);
+    if (mat) await loadMaterialWorkspace(mat);
+  } else if (st.materialId) {
+    const mat = st.materialsList.find(m => m.id === st.materialId);
+    if (mat) await loadMaterialWorkspace(mat);
+    else renderMaterialPicker();
+  }
+}
+
+async function initMaterialsAfterLogin(opts = {}) {
+  if (!currentSession) {
+    await loadSavedBuilder({ silent: opts.silent });
+    return;
+  }
+  try {
+    await fetchMaterialsList();
+  } catch (e) {
+    console.warn('materials list', e);
+  }
+
+  const stored = getStoredActiveMaterialId();
+  const pick = stored && st.materialsList.some(m => m.id === stored)
+    ? stored
+    : (st.materialsList[0]?.id || '');
+  if (pick) {
+    const mat = st.materialsList.find(m => m.id === pick);
+    if (mat) {
+      st.materialId = mat.id;
+      st.bookFileName = mat.fileName || st.bookFileName;
+      st.bookStoragePath = mat.storagePath || null;
+      st.bookTotalPages = mat.totalPages || st.bookTotalPages;
+      applyMaterialChaptersToState(mat.chapters || []);
+    }
+  }
+
+  await loadSavedBuilder({ silent: opts.silent });
+  renderMaterialPicker();
+}
+
+async function ensureMaterialRecordForBook() {
+  if (st.materialId || !st.bookFileName || !currentSession?.access_token) return st.materialId;
+  const token = currentSession.access_token;
+  const r = await fetch('/api/material', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      fileName: st.bookFileName,
+      storagePath: st.bookStoragePath || null,
+      totalPages: st.bookTotalPages || 0,
+    }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Erro ao criar material');
+  const rec = normalizeMaterialRecord(data);
+  st.materialId = rec.id;
+  setStoredActiveMaterialId(rec.id);
+  upsertMaterialInList(rec);
+  renderMaterialPicker();
+  return rec.id;
+}
+
 async function persistMaterialChapters() {
   if (!currentSession?.access_token || !st.materialChapters?.length) return;
   try {
+    await ensureMaterialRecordForBook();
     const token = currentSession.access_token;
     const body = {
       fileName: st.bookFileName,
@@ -1584,9 +3016,657 @@ async function persistMaterialChapters() {
       body: JSON.stringify(body),
     });
     const data = await r.json().catch(() => ({}));
-    if (r.ok && data.id) st.materialId = data.id;
-    else if (r.ok && data.materialId) st.materialId = data.materialId;
+    if (r.ok && data.id) {
+      st.materialId = data.id;
+      setStoredActiveMaterialId(data.id);
+      upsertMaterialInList(normalizeMaterialRecord(data));
+    } else if (r.ok && data.materialId) {
+      st.materialId = data.materialId;
+      setStoredActiveMaterialId(data.materialId);
+    }
+    if (r.ok && st.materialId) {
+      const cur = st.materialsList.find(m => m.id === st.materialId);
+      if (cur) cur.chapters = [...st.materialChapters];
+      renderMaterialPicker();
+    }
   } catch (e) { console.warn('persistMaterial', e); }
+}
+
+function midiasItemSearchText(item) {
+  return [
+    item.title,
+    item.imageId,
+    item.fileName,
+    item.sourceText,
+    item.caption,
+    item.src,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function getMidiasSelectedSet() {
+  if (!st.midiasSelected) st.midiasSelected = new Set();
+  return st.midiasSelected;
+}
+
+function getFilteredMidiasItems() {
+  const q = (st.midiasFilterQuery || '').trim().toLowerCase();
+  const items = st.cloudImageIndex || [];
+  if (!q) return items;
+  return items.filter((i) => midiasItemSearchText(i).includes(q));
+}
+
+function buildMidiaCardHtml(item) {
+  const id = escHtml(item.imageId);
+  const title = escHtml((item.title || item.imageId).slice(0, 48));
+  const src = escHtml((item.sourceText || item.caption || '').slice(0, 42));
+  const pg = item.pageNumber ? `p.${item.pageNumber}` : '';
+  const inBuilder = st.imageCatalog.some(i => i.imageId === item.imageId);
+  const url = escHtml(item.previewUrl || '');
+  const checked = getMidiasSelectedSet().has(item.imageId);
+  return `<div class="cloud-img-card midia-card img-thumb cloud-ok${inBuilder ? ' block-ready' : ''}${checked ? ' midia-selected' : ''}" data-cloud-id="${id}">
+    <label class="midia-chk-wrap" onclick="event.stopPropagation()">
+      <input type="checkbox" class="midia-chk" data-midia-id="${id}" ${checked ? 'checked' : ''} onchange="toggleMidiaSelection('${id}', this.checked)" aria-label="Selecionar">
+    </label>
+    <img src="${url}" alt="${title}" loading="lazy">
+    <div class="img-thumb-foot">
+      <span class="img-thumb-pg">${pg || '☁️'}</span>
+      <span class="img-thumb-src" title="${src}">${src || 'Sem fonte'}</span>
+    </div>
+    <div class="cloud-img-title">${title}</div>
+    <div class="cloud-img-actions">
+      <button type="button" class="img-suggest-btn" id="sugbtn-${id}" onclick="event.stopPropagation();suggestQuestionForImage('${id}')">💡 Sugerir questão</button>
+      <button type="button" class="img-name-btn ready" onclick="event.stopPropagation();openCloudImageModal('${id}')">✏️ Nomear</button>
+      <button type="button" class="midias-del-btn" onclick="event.stopPropagation();deleteCloudImage('${id}')">🗑 Apagar</button>
+    </div>
+    <div class="img-suggest-box" id="sugbox-${id}"></div>
+  </div>`;
+}
+
+function updateMidiasToolbarState() {
+  const items = getFilteredMidiasItems();
+  const total = (st.cloudImageIndex || []).length;
+  const status = document.getElementById('midias-status') || document.getElementById('cloud-images-status');
+  const selCount = document.getElementById('midias-sel-count');
+  const btnAll = document.getElementById('midias-select-all');
+  const delBtn = document.getElementById('midias-delete-selected');
+  const nSel = getMidiasSelectedSet().size;
+
+  if (status) {
+    const q = (st.midiasFilterQuery || '').trim();
+    if (q && items.length !== total) {
+      status.textContent = `${items.length} de ${total} (filtro)`;
+    } else {
+      status.textContent = `${total} arquivo(s)`;
+    }
+  }
+  if (selCount) selCount.textContent = nSel ? `${nSel} selecionada(s)` : '';
+  if (btnAll) {
+    if (!items.length) {
+      btnAll.textContent = '☑ Selecionar tudo';
+      btnAll.disabled = true;
+    } else {
+      btnAll.disabled = false;
+      const allOn = items.every((i) => getMidiasSelectedSet().has(i.imageId));
+      btnAll.textContent = allOn ? '☐ Desmarcar tudo' : '☑ Selecionar tudo';
+    }
+  }
+  if (delBtn) delBtn.style.display = nSel ? '' : 'none';
+}
+
+function renderMidiasGrid() {
+  const grid = document.getElementById('midias-grid') || document.getElementById('cloud-images-grid');
+  if (!grid) return;
+
+  const items = getFilteredMidiasItems();
+  const total = (st.cloudImageIndex || []).length;
+
+  if (!total) {
+    grid.innerHTML =
+      '<div class="img-no-img" style="grid-column:1/-1">Nenhuma imagem em <b>images/</b> ainda. Recorte uma figura, envie um arquivo ou use «Salvar na nuvem».</div>';
+    updateMidiasToolbarState();
+    return;
+  }
+
+  if (!items.length) {
+    grid.innerHTML =
+      '<div class="img-no-img" style="grid-column:1/-1">Nenhuma imagem encontrada com esse nome. Limpe o filtro ou tente outro termo.</div>';
+    updateMidiasToolbarState();
+    return;
+  }
+
+  grid.innerHTML = items.map(buildMidiaCardHtml).join('');
+  updateMidiasToolbarState();
+}
+
+function filterMidiasByName(value) {
+  st.midiasFilterQuery = value ?? document.getElementById('midias-search')?.value ?? '';
+  renderMidiasGrid();
+}
+
+function toggleMidiaSelection(imageId, checked) {
+  const set = getMidiasSelectedSet();
+  if (checked) set.add(imageId);
+  else set.delete(imageId);
+  const card = document.querySelector(`[data-cloud-id="${imageId}"]`);
+  if (card) card.classList.toggle('midia-selected', checked);
+  updateMidiasToolbarState();
+}
+
+function selectAllMidiasVisible() {
+  const items = getFilteredMidiasItems();
+  if (!items.length) return;
+  const set = getMidiasSelectedSet();
+  const allOn = items.every((i) => set.has(i.imageId));
+  if (allOn) items.forEach((i) => set.delete(i.imageId));
+  else items.forEach((i) => set.add(i.imageId));
+  renderMidiasGrid();
+}
+
+function clearMidiasSelection() {
+  st.midiasSelected = new Set();
+  renderMidiasGrid();
+}
+
+async function refreshCloudImagesDashboard() {
+  const grid = document.getElementById('midias-grid') || document.getElementById('cloud-images-grid');
+  const status = document.getElementById('midias-status') || document.getElementById('cloud-images-status');
+  if (!grid) return;
+
+  if (!currentSession) {
+    if (status) status.textContent = 'Faça login';
+    grid.innerHTML = '<div class="img-no-img" style="grid-column:1/-1">Entre na conta para ver imagens do Supabase Storage.</div>';
+    return;
+  }
+  if (!cloudReady()) {
+    if (status) status.textContent = 'Nuvem indisponível';
+    grid.innerHTML = '<div class="img-no-img" style="grid-column:1/-1">Supabase não conectado.</div>';
+    return;
+  }
+
+  if (status) status.textContent = 'Carregando...';
+  grid.innerHTML = '<div class="img-spin" style="grid-column:1/-1;padding:24px;text-align:center"><span>⏳</span> Listando pasta images...</div>';
+
+  try {
+    const items = await PedagiaCloud.listStorageImages();
+    st.cloudImageIndex = items;
+
+    for (const item of items) {
+      ensureCloudCatalogEntry(item);
+    }
+    scheduleMidiasSourceAnalysis();
+
+    const searchEl = document.getElementById('midias-search');
+    if (searchEl && searchEl.value !== (st.midiasFilterQuery || '')) {
+      searchEl.value = st.midiasFilterQuery || '';
+    }
+    renderMidiasGrid();
+  } catch (e) {
+    console.warn('cloud gallery:', e);
+    if (status) status.textContent = 'Erro';
+    grid.innerHTML = `<div class="img-no-img" style="grid-column:1/-1">Não foi possível listar: ${escHtml(e.message || String(e))}</div>`;
+  }
+}
+
+function getCloudImageEntry(imageId) {
+  const fromCloud = (st.cloudImageIndex || []).find(i => i.imageId === imageId);
+  const fromCat = getImageCatalogEntry(imageId);
+  if (fromCat) {
+    if (fromCloud) {
+      fromCat.storagePath = fromCloud.storagePath;
+      fromCat.previewUrl = fromCloud.previewUrl || fromCat.previewUrl;
+      fromCat.cloudSaved = true;
+    }
+    return fromCat;
+  }
+  return fromCloud || null;
+}
+
+async function useCloudImageInBuilder(imageId, opts = {}) {
+  const cloud = (st.cloudImageIndex || []).find(i => i.imageId === imageId);
+  if (!cloud) {
+    toast('Imagem não encontrada na nuvem.', 'err');
+    return;
+  }
+  let entry = getImageCatalogEntry(imageId);
+  if (!entry) {
+    entry = {
+      imageId: cloud.imageId,
+      storagePath: cloud.storagePath,
+      previewUrl: cloud.previewUrl,
+      dataUri: cloud.previewUrl,
+      dataUrl: cloud.previewUrl,
+      title: cloud.title,
+      src: cloud.sourceText || cloud.caption,
+      caption: cloud.caption || cloud.sourceText,
+      sourceText: cloud.sourceText,
+      pageNumber: cloud.pageNumber,
+      cloudSaved: true,
+      savedToBuilder: true,
+      recommendedForQuestion: true,
+      type: 'figura',
+      usefulnessScore: 1,
+      manualCrop: true,
+    };
+    st.imageCatalog.push(entry);
+    st.extractedImages.push(entry);
+    scheduleImageSegmentation(entry);
+    const imgSec = document.getElementById('img-section');
+    const gallery = document.getElementById('img-gallery');
+    if (imgSec) imgSec.style.display = '';
+    if (gallery) appendCropCardToGallery(entry);
+    updateCropGalleryCount();
+  } else {
+    entry.storagePath = cloud.storagePath;
+    entry.previewUrl = cloud.previewUrl || entry.previewUrl;
+    entry.cloudSaved = true;
+    entry.savedToBuilder = true;
+    syncImageThumbMeta(imageId);
+    if (!entry.segmented && !(entry.sourceText || '').trim()) {
+      scheduleImageSegmentation(entry);
+    }
+  }
+  saveImageToBuilder(imageId);
+  scheduleSaveBuilder();
+  refreshMidiasPage();
+  if (!opts.silent) toast('Figura adicionada ao builder. Use «Sugerir questão».', 'ok', 3500);
+}
+
+async function openCloudImageModal(imageId) {
+  await useCloudImageInBuilder(imageId, { silent: true });
+  openImageNameModal(imageId);
+}
+
+function refreshMidiasPage() {
+  if (document.getElementById('midia-gen-cats') && !document.querySelector('.midia-gen-cat.on')) {
+    setMidiaGenCategory(st.midiaGenCategory || 'mapa');
+  }
+  return refreshCloudImagesDashboard();
+}
+
+function removeImageFromLocalState(imageId) {
+  st.imageCatalog = st.imageCatalog.filter(i => i.imageId !== imageId);
+  st.extractedImages = st.extractedImages.filter(i => i.imageId !== imageId);
+  st.imageQuestionBlocks = st.imageQuestionBlocks.filter(b => b.imageId !== imageId);
+  st.cloudImageIndex = (st.cloudImageIndex || []).filter(i => i.imageId !== imageId);
+  const card = document.getElementById('imgi-' + imageId);
+  if (card) card.remove();
+  const midiaCard = document.querySelector(`[data-cloud-id="${imageId}"]`);
+  if (midiaCard) midiaCard.remove();
+  updateCropGalleryCount();
+  updateBlockSelInfo();
+  scheduleSaveBuilder();
+}
+
+async function deleteCloudImage(imageId, opts = {}) {
+  if (!opts.skipConfirm && !confirm('Apagar esta imagem da nuvem? Questões ligadas a ela serão removidas do builder.')) {
+    return;
+  }
+  const cloud = (st.cloudImageIndex || []).find(i => i.imageId === imageId);
+  const cat = getImageCatalogEntry(imageId);
+  const storagePath = cloud?.storagePath || cat?.storagePath;
+  try {
+    if (cloudReady() && storagePath) {
+      await PedagiaCloud.deleteStorageImage(storagePath, imageId);
+    }
+    removeImageFromLocalState(imageId);
+    getMidiasSelectedSet().delete(imageId);
+    if (!opts.skipRefresh) await refreshMidiasPage();
+    if (!opts.skipConfirm) toast('Imagem apagada.', 'ok', 3000);
+  } catch (e) {
+    if (!opts.skipConfirm) toast('Erro ao apagar: ' + (e.message || e), 'err', 5000);
+    throw e;
+  }
+}
+
+async function deleteSelectedMidias() {
+  const ids = [...getMidiasSelectedSet()];
+  if (!ids.length) return;
+  if (!confirm(`Apagar ${ids.length} imagem(ns) da nuvem?`)) return;
+  let ok = 0;
+  for (const id of ids) {
+    try {
+      await deleteCloudImage(id, { skipConfirm: true, skipRefresh: true });
+      ok++;
+    } catch (e) {
+      console.warn('delete', id, e);
+    }
+  }
+  st.midiasSelected = new Set();
+  await refreshMidiasPage();
+  toast(`${ok} imagem(ns) apagada(s).`, 'ok', 3500);
+}
+
+const MIDIA_GEN_PLACEHOLDERS = {
+  mapa: 'Ex.: mapa do Brasil com biomas, legenda e escala',
+  anatomia: 'Ex.: sistema digestório humano com rótulos em português',
+  historia: 'Ex.: reconstrução de uma feira medieval no século XIII',
+  arquitetura: 'Ex.: praça colonial com igreja e casarios',
+  educativo: 'Ex.: ciclo da água com setas e legendas curtas',
+};
+
+function setMidiaGenCategory(cat) {
+  st.midiaGenCategory = cat || 'educativo';
+  document.querySelectorAll('.midia-gen-cat').forEach((btn) => {
+    btn.classList.toggle('on', btn.dataset.cat === st.midiaGenCategory);
+  });
+  const ta = document.getElementById('midia-gen-prompt');
+  if (ta) ta.placeholder = MIDIA_GEN_PLACEHOLDERS[st.midiaGenCategory] || MIDIA_GEN_PLACEHOLDERS.educativo;
+}
+
+function setMidiaGenStatus(text, isErr = false) {
+  const el = document.getElementById('midia-gen-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isErr ? 'var(--R)' : 'var(--t3)';
+}
+
+function clearMidiaGenLog() {
+  const el = document.getElementById('midia-gen-log');
+  if (el) el.innerHTML = '';
+}
+
+function appendMidiaGenLog(message, level = 'info') {
+  const el = document.getElementById('midia-gen-log');
+  if (!el) return;
+  const line = document.createElement('div');
+  line.className = `midia-gen-log-line midia-gen-log-${level}`;
+  const t = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  line.textContent = `[${t}] ${message}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function setMidiaGenLoading(active, title) {
+  const overlay = document.getElementById('midia-gen-loading');
+  const panel = document.getElementById('midia-gen-panel');
+  const bar = document.getElementById('midia-gen-progress-bar');
+  const titleEl = document.getElementById('midia-gen-loading-title');
+  const btn = document.getElementById('btn-midia-gen');
+  if (overlay) overlay.style.display = active ? 'flex' : 'none';
+  if (panel) panel.classList.toggle('midia-gen-busy', active);
+  if (btn) btn.disabled = !!active;
+  if (titleEl && title) titleEl.textContent = title;
+  if (bar && !active) bar.style.width = '0%';
+}
+
+function setMidiaGenProgress(percent) {
+  const bar = document.getElementById('midia-gen-progress-bar');
+  if (bar) bar.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+}
+
+async function consumeGerarImagemStream(resp) {
+  if (!resp.body) throw new Error('Resposta sem stream do servidor.');
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let donePayload = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() || '';
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith('data:')) continue;
+      let ev;
+      try {
+        ev = JSON.parse(line.slice(5).trim());
+      } catch {
+        continue;
+      }
+      if (ev.type === 'log' && ev.message) {
+        appendMidiaGenLog(ev.message, ev.level || 'info');
+        if (/Enviando POST/i.test(ev.message)) setMidiaGenProgress(25);
+        if (/respondeu HTTP/i.test(ev.message)) setMidiaGenProgress(55);
+        if (/Modelo cobrado/i.test(ev.message)) setMidiaGenProgress(75);
+      }
+      if (ev.type === 'progress' && ev.percent != null) setMidiaGenProgress(ev.percent);
+      if (ev.type === 'error') throw new Error(ev.error || 'Erro ao gerar imagem');
+      if (ev.type === 'done') donePayload = ev;
+    }
+  }
+
+  if (!donePayload) throw new Error('Geração interrompida antes de concluir.');
+  return donePayload;
+}
+
+async function generateMidiaVisual() {
+  if (!(await ensureFreshSession())) {
+    toast('Faça login para gerar imagens.', 'err');
+    return;
+  }
+  const prompt = (document.getElementById('midia-gen-prompt')?.value || '').trim();
+  if (prompt.length < 8) {
+    toast('Descreva o que deseja gerar (mínimo 8 caracteres).', 'err');
+    return;
+  }
+
+  const btn = document.getElementById('btn-midia-gen');
+  const saveBtn = document.getElementById('btn-midia-gen-save');
+  const preview = document.getElementById('midia-gen-preview');
+  if (btn) btn.textContent = '⏳ Gerando…';
+  if (saveBtn) saveBtn.style.display = 'none';
+  st.pendingGeneratedImage = null;
+  clearMidiaGenLog();
+  setMidiaGenStatus('');
+  setMidiaGenLoading(true, 'Gerando imagem com Kie AI…');
+  setMidiaGenProgress(8);
+  appendMidiaGenLog('Iniciando pedido ao servidor PedagIA…');
+
+  try {
+    let imageModelHint = '';
+    try {
+      const cfgRes = await fetch('/api/config');
+      const cfg = await cfgRes.json().catch(() => ({}));
+      const kieModel = cfg.kieImageModel || cfg.openRouterImageModel;
+      if (kieModel) {
+        imageModelHint = kieModel;
+        appendMidiaGenLog(`Modelo Kie: ${kieModel}`);
+      }
+      const kieHint = cfg.kieImageHint || cfg.openRouterImageModelError;
+      if (kieHint) appendMidiaGenLog(kieHint, 'warn');
+      appendMidiaGenLog(`Provas (texto): ${cfg.openRouterTextModel || '—'}`, 'info');
+    } catch {
+      appendMidiaGenLog('Não foi possível ler /api/config', 'warn');
+    }
+
+    setMidiaGenProgress(15);
+    appendMidiaGenLog('Enviando tarefa para Kie AI (GPT Image 2)…');
+
+    const resp = await fetch('/api/gerar-imagem', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${currentSession.access_token}`,
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify({
+        stream: true,
+        category: st.midiaGenCategory || 'educativo',
+        prompt,
+        aspectRatio: document.getElementById('midia-gen-aspect')?.value || '4:3',
+        title: document.getElementById('midia-gen-title')?.value?.trim() || '',
+        disciplina: v('f-disc'),
+        serie: v('f-serie'),
+      }),
+    });
+
+    if (!resp.ok) {
+      const errJson = await resp.json().catch(() => ({}));
+      throw new Error(errJson.error || `Erro HTTP ${resp.status}`);
+    }
+
+    const contentType = resp.headers.get('content-type') || '';
+    let data;
+    if (contentType.includes('text/event-stream')) {
+      data = await consumeGerarImagemStream(resp);
+    } else {
+      data = await resp.json();
+      if (data.log) {
+        for (const entry of data.log) {
+          appendMidiaGenLog(entry.message, entry.level || 'info');
+        }
+      }
+    }
+
+    if (data.modelUsed && data.modelUsed !== data.modelRequested) {
+      appendMidiaGenLog(
+        `Pedido: ${data.modelRequested} → cobrado: ${data.modelUsed}`,
+        'warn',
+      );
+    } else if (data.modelUsed) {
+      appendMidiaGenLog(`Modelo confirmado na fatura: ${data.modelUsed}`, 'ok');
+    }
+
+    const img = data.images?.[0];
+    if (!img?.base64 && !img?.dataUrl) throw new Error('Nenhuma imagem retornada.');
+
+    st.pendingGeneratedImage = {
+      ...img,
+      category: data.category,
+      title: data.title || prompt.slice(0, 60),
+      sourceText: 'Fonte: ilustração gerada por IA (PedagIA / Kie AI).',
+      modelUsed: data.modelUsed,
+    };
+
+    if (preview) {
+      preview.src = img.dataUrl || `data:${img.mime || 'image/png'};base64,${img.base64}`;
+      preview.style.display = 'block';
+    }
+    if (saveBtn) saveBtn.style.display = '';
+    const titleInput = document.getElementById('midia-gen-title');
+    if (titleInput && !titleInput.value.trim() && data.title) titleInput.value = data.title;
+
+    setMidiaGenProgress(100);
+    setMidiaGenStatus(
+      `Pronto — ${data.modelUsed || imageModelHint || 'imagem'}. Salve na nuvem.`,
+    );
+    toast('Imagem gerada! Confira o log e salve na nuvem.', 'ok', 4500);
+  } catch (e) {
+    const friendly = humanizeIaApiError(e.message);
+    appendMidiaGenLog(friendly, 'error');
+    setMidiaGenStatus(friendly, true);
+    toast(friendly, 'err', 8000);
+    if (preview) preview.style.display = 'none';
+  } finally {
+    setMidiaGenLoading(false);
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Gerar imagem'; }
+  }
+}
+
+async function saveGeneratedMidiaToCloud() {
+  const pending = st.pendingGeneratedImage;
+  if (!pending) {
+    toast('Gere uma imagem antes de salvar.', 'err');
+    return;
+  }
+  if (!cloudReady()) {
+    toast('Faça login para salvar na nuvem.', 'err');
+    return;
+  }
+
+  const saveBtn = document.getElementById('btn-midia-gen-save');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ Salvando…'; }
+
+  try {
+    const mime = pending.mime || 'image/png';
+    if (!cleanB64(pending.base64 || '') && pending.dataUrl) {
+      const fetched = await fetchUrlToB64(pending.dataUrl);
+      if (fetched) pending.base64 = fetched;
+    }
+    const raw = cleanB64(pending.base64 || '');
+    if (!raw) throw new Error('Imagem sem dados para enviar.');
+
+    const bin = atob(raw);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+    const title = (document.getElementById('midia-gen-title')?.value || pending.title || 'IA').trim();
+    const file = new File([arr], `${title.slice(0, 40).replace(/[^\w\-]+/g, '_')}.${ext}`, { type: mime });
+
+    const uploaded = await PedagiaCloud.uploadMediaImage(file);
+    const entry = {
+      ...uploaded,
+      title: title.slice(0, 80),
+      sourceText: pending.sourceText || 'Fonte: ilustração gerada por IA (PedagIA).',
+      caption: title.slice(0, 80),
+      savedToBuilder: true,
+      recommendedForQuestion: true,
+      type: 'figura',
+      usefulnessScore: 1,
+      manualCrop: false,
+      aiGenerated: true,
+    };
+    const existing = getImageCatalogEntry(entry.imageId);
+    if (!existing) {
+      st.imageCatalog.push(entry);
+      st.extractedImages.push(entry);
+    } else {
+      Object.assign(existing, entry);
+    }
+
+    entry.segmented = !!(entry.sourceText || '').trim();
+    if (typeof PedagiaCloud.upsertImageMeta === 'function') {
+      try { await PedagiaCloud.upsertImageMeta(entry); } catch (e) { console.warn('upsertImageMeta', e); }
+    }
+    scheduleSaveBuilder();
+    await refreshMidiasPage();
+    st.pendingGeneratedImage = null;
+    setMidiaGenStatus('Salva na galeria. Use «Sugerir questão» no card.');
+    toast('Imagem salva em Minhas mídias.', 'ok', 4000);
+    const saveBtn2 = document.getElementById('btn-midia-gen-save');
+    if (saveBtn2) saveBtn2.style.display = 'none';
+  } catch (e) {
+    toast(e.message || 'Erro ao salvar.', 'err', 6000);
+    setMidiaGenStatus(e.message, true);
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '💾 Salvar na nuvem'; }
+  }
+}
+
+async function handleMidiasUpload(input) {
+  const files = [...(input.files || [])];
+  input.value = '';
+  if (!files.length) return;
+  if (!cloudReady()) {
+    toast('Faça login para enviar imagens à nuvem.', 'err');
+    return;
+  }
+  let ok = 0;
+  for (const file of files) {
+    try {
+      const uploaded = await PedagiaCloud.uploadMediaImage(file);
+      const entry = {
+        ...uploaded,
+        title: file.name.replace(/\.[^.]+$/, '').slice(0, 80),
+        savedToBuilder: true,
+        recommendedForQuestion: true,
+        type: 'figura',
+        usefulnessScore: 1,
+        manualCrop: true,
+      };
+      const existing = getImageCatalogEntry(entry.imageId);
+      if (!existing) {
+        st.imageCatalog.push(entry);
+        st.extractedImages.push(entry);
+      } else {
+        Object.assign(existing, entry);
+      }
+      ok++;
+    } catch (e) {
+      toast(`Falha em ${file.name}: ${e.message}`, 'err', 5000);
+    }
+  }
+  if (ok) {
+    scheduleSaveBuilder();
+    await refreshMidiasPage();
+    toast(`${ok} imagem(ns) adicionada(s).`, 'ok', 3500);
+  }
 }
 
 function showImageReviewPanel(filter = 'all') {
@@ -1655,9 +3735,14 @@ function selectChapter(el, idx) {
   const end = mat?.pdfPageEnd || (next?.pageNum ? next.pageNum - 1 : null);
 
   if (start) {
-    const endPg = end || Math.min(start + 24, st.bookTotalPages);
+    const useAllInChapter = st.sumarioSkipped
+      || (mat?.pdfPageEnd && mat.pdfPageEnd - start + 1 >= (st.bookTotalPages || 0) - 1);
+    const endPg = useAllInChapter
+      ? (mat?.pdfPageEnd || st.bookTotalPages)
+      : (end || Math.min(start + 24, st.bookTotalPages));
+    const maxPages = useAllInChapter ? (st.bookTotalPages || endPg) : Math.min(endPg, start + 29);
     const pages = [];
-    for (let p = start; p <= Math.min(endPg, start + 29); p++) {
+    for (let p = start; p <= maxPages; p++) {
       pages.push(p);
       st.selectedPages.add(p);
     }
@@ -1736,7 +3821,33 @@ async function extractSelectedPages() {
       text += `[Página ${p}]\n${pt.trim()}\n\n`;
     } catch {}
   }
+  const core = getCore();
+  if (core?.cleanFullChapterText) return core.cleanFullChapterText(text);
   return text;
+}
+
+async function analyzeChapterForExam({ chapterTitle, pagesText, pages }) {
+  const token = currentSession?.access_token;
+  if (!token || !pagesText || pagesText.length < 200) return null;
+  try {
+    const r = await fetch('/api/analisar-capitulo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        chapterTitle: chapterTitle || '',
+        serie: v('f-serie'),
+        disciplina: v('f-disc'),
+        pages: pages || [],
+        pagesText,
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok && data.brief) return data.brief;
+    console.warn('analisar-capitulo:', data.error || r.status);
+  } catch (e) {
+    console.warn('analisar capítulo', e);
+  }
+  return null;
 }
 
 // ══════════════════════════════════════════════
@@ -2057,6 +4168,76 @@ function registerCatalogImage(img, pageNum, srcHint) {
 let _modalImageId = null;
 const _segmentPending = new Set();
 
+function ensureCloudCatalogEntry(cloud) {
+  if (!cloud?.imageId) return null;
+  let entry = getImageCatalogEntry(cloud.imageId);
+  if (!entry) {
+    entry = {
+      imageId: cloud.imageId,
+      storagePath: cloud.storagePath,
+      previewUrl: cloud.previewUrl,
+      dataUri: cloud.previewUrl,
+      dataUrl: cloud.previewUrl,
+      title: cloud.title || '',
+      src: cloud.sourceText || cloud.caption || '',
+      caption: cloud.caption || cloud.sourceText || '',
+      sourceText: cloud.sourceText || cloud.caption || '',
+      pageNumber: cloud.pageNumber,
+      cloudSaved: true,
+      segmented: !!(cloud.sourceText || '').trim(),
+      manualCrop: true,
+      type: 'figura',
+      usefulnessScore: 1,
+    };
+    st.imageCatalog.push(entry);
+    st.extractedImages.push(entry);
+  } else {
+    entry.storagePath = cloud.storagePath || entry.storagePath;
+    entry.previewUrl = cloud.previewUrl || entry.previewUrl;
+    entry.dataUri = cloud.previewUrl || entry.dataUri;
+    entry.cloudSaved = true;
+    if (cloud.title) entry.title = cloud.title;
+    if (cloud.sourceText) {
+      entry.sourceText = cloud.sourceText;
+      entry.src = cloud.sourceText;
+      entry.caption = cloud.sourceText;
+      entry.segmented = true;
+    }
+  }
+  return entry;
+}
+
+function scheduleMidiasSourceAnalysis() {
+  for (const item of st.cloudImageIndex || []) {
+    const entry = ensureCloudCatalogEntry(item);
+    if (!entry) continue;
+    const hasSource = !!(entry.sourceText || entry.caption || entry.src || '').trim();
+    if (hasSource && !entry.segmented) {
+      entry.segmented = true;
+      continue;
+    }
+    if (!hasSource && !entry.segmented) scheduleImageSegmentation(entry);
+  }
+}
+
+function syncMidiaCardMeta(imageId) {
+  const entry = getCloudImageEntry(imageId);
+  if (!entry) return;
+  const esc = (typeof CSS !== 'undefined' && CSS.escape)
+    ? CSS.escape(imageId)
+    : String(imageId).replace(/"/g, '\\"');
+  const card = document.querySelector(`[data-cloud-id="${esc}"]`);
+  if (!card) return;
+  const srcEl = card.querySelector('.img-thumb-src');
+  const src = (entry.sourceText || entry.caption || entry.src || '').trim();
+  if (srcEl) {
+    srcEl.textContent = src ? src.slice(0, 42) : (entry._segmentError ? 'Erro IA' : 'Analisando…');
+    srcEl.title = entry._segmentError || src || 'Aguardando análise da fonte';
+  }
+  const titleEl = card.querySelector('.cloud-img-title');
+  if (titleEl && entry.title) titleEl.textContent = entry.title.slice(0, 48);
+}
+
 function scheduleImageSegmentation(entry) {
   if (!entry?.imageId || _segmentPending.has(entry.imageId)) return;
   _segmentPending.add(entry.imageId);
@@ -2066,21 +4247,35 @@ function scheduleImageSegmentation(entry) {
 }
 
 async function segmentImageWithAI(entry) {
-  const b64 = getImageB64(entry);
-  if (!b64) return entry;
+  let b64 = getImageB64(entry);
+  if (!b64) b64 = await ensureImageB64(entry);
+  if (!b64) {
+    entry._segmentError = 'Imagem sem dados para análise';
+    syncMidiaCardMeta(entry.imageId);
+    return entry;
+  }
   const tok = currentSession?.access_token;
   if (!tok) return entry;
+
+  syncMidiaCardMeta(entry.imageId);
+
   const resp = await fetch('/api/segmentar-imagem', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok },
     body: JSON.stringify({
       imageBase64: b64,
+      storagePath: entry.storagePath || '',
       pageNumber: entry.pageNumber || entry.pageNum,
       textSourceHint: entry.src || entry.caption || '',
     }),
   });
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) return entry;
+  if (!resp.ok) {
+    entry._segmentError = data.error || `HTTP ${resp.status}`;
+    syncMidiaCardMeta(entry.imageId);
+    return entry;
+  }
+  delete entry._segmentError;
   if (data.title && !entry.title) entry.title = data.title;
   if (data.description) entry.description = data.description;
   if (data.source_text) {
@@ -2095,7 +4290,21 @@ async function segmentImageWithAI(entry) {
     const cls = core.classifyExtractedImage(entry, entry.src || '');
     Object.assign(entry, core.applyClassification(entry, cls));
   }
+  const cloudItem = (st.cloudImageIndex || []).find((i) => i.imageId === entry.imageId);
+  if (cloudItem) {
+    cloudItem.title = entry.title || cloudItem.title;
+    cloudItem.sourceText = entry.sourceText || cloudItem.sourceText;
+    cloudItem.caption = entry.caption || cloudItem.caption;
+  }
+  if (cloudReady() && typeof PedagiaCloud.upsertImageMeta === 'function') {
+    try {
+      await PedagiaCloud.upsertImageMeta(entry);
+    } catch (e) {
+      console.warn('upsertImageMeta', entry.imageId, e);
+    }
+  }
   syncImageThumbMeta(entry.imageId);
+  syncMidiaCardMeta(entry.imageId);
   return entry;
 }
 
@@ -2117,7 +4326,7 @@ function syncImageThumbMeta(imageId) {
 }
 
 function openImageNameModal(imageId) {
-  const entry = getImageCatalogEntry(imageId);
+  const entry = getCloudImageEntry(imageId) || getImageCatalogEntry(imageId);
   if (!entry) return;
   _modalImageId = imageId;
   const modal = document.getElementById('img-name-modal');
@@ -2161,14 +4370,16 @@ async function confirmImageCatalogEntry() {
   entry.src = src;
   entry.caption = src;
 
-  if (!getImageB64(entry)) {
-    toast('Imagem sem dados — extraia de novo.', 'err');
+  if (!getImageB64(entry) && !entry.storagePath) {
+    toast('Imagem sem dados — extraia de novo ou atualize a galeria da nuvem.', 'err');
     return;
   }
 
   if (cloudReady()) {
     try {
-      await PedagiaCloud.uploadCatalogImage(entry);
+      if (!entry.storagePath && getImageB64(entry)) {
+        await PedagiaCloud.uploadCatalogImage(entry);
+      }
       entry.cloudSaved = true;
     } catch (e) {
       toast('Falha ao enviar imagem: ' + e.message, 'err', 5000);
@@ -2183,6 +4394,7 @@ async function confirmImageCatalogEntry() {
   syncImageThumbMeta(imageId);
   closeImageNameModal();
   scheduleSaveBuilder();
+  refreshMidiasPage();
   toast('Imagem salva na nuvem — pronta para o Word.', 'ok', 4000);
 }
 
@@ -2318,7 +4530,57 @@ function getSelectedImageBlocks() {
 }
 
 function imageHasBinary(img) {
-  return !!(img?.base64 || img?.dataUri || img?.previewUrl || img?.dataUrl);
+  return !!(img?.base64 || img?.dataUri || img?.previewUrl || img?.dataUrl || img?.storagePath);
+}
+
+async function ensureImageB64(img) {
+  if (!img) return '';
+  let b64 = getImageB64(img);
+  if (b64) return b64;
+  if (cloudReady() && img.storagePath) {
+    try {
+      b64 = await PedagiaCloud.fetchImageB64(img);
+      if (b64) {
+        img.base64 = cleanB64(b64);
+        return img.base64;
+      }
+    } catch (e) {
+      console.warn('fetchImageB64', img.imageId, e);
+    }
+  }
+  if (img.storagePath && currentSession?.access_token) {
+    try {
+      const resp = await fetch('/api/storage-image-b64', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + currentSession.access_token,
+        },
+        body: JSON.stringify({ storagePath: img.storagePath }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.base64) {
+        img.base64 = cleanB64(data.base64);
+        if (data.mime) img.mime = data.mime;
+        return img.base64;
+      }
+    } catch (e) {
+      console.warn('storage-image-b64', img.imageId, e);
+    }
+  }
+  const url = img.previewUrl || img.dataUri || img.dataUrl || '';
+  if (url) {
+    try {
+      b64 = await fetchUrlToB64(url);
+      if (b64) {
+        img.base64 = cleanB64(b64);
+        return img.base64;
+      }
+    } catch (e) {
+      console.warn('fetchUrlToB64', img.imageId, e);
+    }
+  }
+  return '';
 }
 
 function getImageB64(img) {
@@ -2433,22 +4695,24 @@ function updatePreviewStatus(issues, questionCount) {
 }
 
 async function refreshExamPreview() {
-  if (!canPreviewExam()) {
-    const fc = document.getElementById('form-preview-card');
-    if (fc) fc.style.display = 'none';
-    return;
-  }
+  renderExamVisualBuilder();
+  const hasPlan =
+    st.imageQuestionBlocks.some((b) => b.question?.statement) || st.provaText?.trim() || st.numQ > 0;
+  if (!hasPlan && !canPreviewExam()) return;
+
   syncProvaStateFromUI();
-  await ensureExamImagesResolved();
+  if (canPreviewExam()) {
+    await ensureExamImagesResolved();
+  }
   const { exam, questions, issues } = getExamBuildResult();
   const core = getCore();
-  let html;
-  if (core && exam) {
+  let html = '<p style="padding:16px;font-family:sans-serif;color:#666">Monte questões com figuras ou gere a prova para ver o preview completo.</p>';
+  if (core && exam && (exam.questions?.length || canPreviewExam())) {
     await core.resolveExamModelImages(exam, st.imageCatalog, resolveImageB64ForCore);
     if (core.embedCatalogDataUris) core.embedCatalogDataUris(st.imageCatalog);
     const headerImageUrl = await getTemplateHeaderPreviewDataUrl();
     html = core.renderExamHtml(exam, st.imageCatalog, { headerImageUrl });
-  } else {
+  } else if (questions.length) {
     html = await buildExamPreviewHtml(questions);
   }
   for (const id of ['exam-preview-iframe', 'form-preview-iframe']) {
@@ -2456,8 +4720,6 @@ async function refreshExamPreview() {
     if (iframe) iframe.srcdoc = html;
   }
   updatePreviewStatus(issues, questions.length);
-  const fc = document.getElementById('form-preview-card');
-  if (fc) fc.style.display = '';
 }
 
 function buildExamQuestions() {
@@ -2491,7 +4753,10 @@ function buildExamQuestions() {
 }
 
 function syncBlockCardUI(imageId) {
-  const el = document.querySelector(`[data-image-id="${imageId}"]`);
+  const ui = typeof findSuggestUi === 'function' ? findSuggestUi(imageId) : null;
+  const el = ui?.card
+    || document.querySelector(`[data-cloud-id="${imageId}"]`)
+    || document.querySelector(`[data-image-id="${imageId}"]`);
   const block = getBlockByImageId(imageId);
   if (!el) return;
   const ready = !!(block?.question?.statement);
@@ -2783,15 +5048,95 @@ function togImgBlockCard(imageId) {
   scheduleExamPreview();
 }
 
+function humanizeIaApiError(message) {
+  const msg = String(message || '');
+  if (/KIE_API_KEY|kie\.ai\/api-key/i.test(msg)) return msg;
+  if (/Kie AI.*401|chave inválida.*Kie/i.test(msg)) {
+    return 'Chave Kie AI inválida. Configure KIE_API_KEY no .env (kie.ai/api-key) e reinicie npm run dev.';
+  }
+  if (/Kie AI.*402|créditos insuficientes.*Kie/i.test(msg)) {
+    return 'Sem créditos na Kie AI. Recarregue em kie.ai.';
+  }
+  if (/OPENROUTER_API_KEY|openrouter\.ai\/keys/i.test(msg)) return msg;
+  if (/user not found/i.test(msg) || /OpenRouter.*401/i.test(msg)) {
+    return (
+      'Chave OpenRouter inválida no servidor. ' +
+      'Configure OPENROUTER_API_KEY no .env (openrouter.ai/keys) e reinicie o npm run dev.'
+    );
+  }
+  if (/insufficient|crédito|credit/i.test(msg)) {
+    if (/Kie/i.test(msg)) return 'Sem créditos na Kie AI. Recarregue em kie.ai.';
+    return 'Sem créditos na OpenRouter. Adicione saldo em openrouter.ai/settings/credits.';
+  }
+  return msg.replace(/^(OpenRouter|Kie AI):\s*/i, '').slice(0, 280) || 'Erro ao chamar a IA.';
+}
+
+function findSuggestUi(imageId) {
+  const esc = (typeof CSS !== 'undefined' && CSS.escape)
+    ? CSS.escape(imageId)
+    : String(imageId).replace(/"/g, '\\"');
+  const cards = document.querySelectorAll(
+    `[data-cloud-id="${esc}"], [data-image-id="${esc}"], #imgi-${esc}`,
+  );
+  for (const card of cards) {
+    const view = card.closest('[id^="view-"]');
+    if (view && view.style.display === 'none') continue;
+    const btn = card.querySelector('.img-suggest-btn');
+    const box = card.querySelector('.img-suggest-box');
+    if (btn && box) return { btn, box, card };
+  }
+  if (cards.length) {
+    const card = cards[0];
+    return {
+      btn: card.querySelector('.img-suggest-btn'),
+      box: card.querySelector('.img-suggest-box'),
+      card,
+    };
+  }
+  return {
+    btn: document.getElementById('sugbtn-' + imageId),
+    box: document.getElementById('sugbox-' + imageId),
+    card: null,
+  };
+}
+
 async function suggestQuestionForImage(imageId) {
-  const image = getImageCatalogEntry(imageId);
-  if (!image || !getImageB64(image)) {
-    toast('Imagem inválida ou sem recorte.', 'err');
+  if (!(await ensureFreshSession())) {
+    toast('Faça login para usar a IA.', 'err');
     return;
   }
-  const btn = document.getElementById('sugbtn-' + imageId);
-  const box = document.getElementById('sugbox-' + imageId);
-  if (!btn || !box) return;
+  let image = getCloudImageEntry(imageId);
+  if (!image) {
+    const cloud = (st.cloudImageIndex || []).find(i => i.imageId === imageId);
+    if (cloud) image = cloud;
+  }
+  if (!image) {
+    toast('Imagem não encontrada. Atualize a lista em Minhas mídias.', 'err');
+    return;
+  }
+  if (!getImageCatalogEntry(imageId)) {
+    await useCloudImageInBuilder(imageId, { silent: true });
+    image = getCloudImageEntry(imageId) || image;
+  }
+  if (!(image.sourceText || image.caption || image.src || '').trim()) {
+    const entry = getCloudImageEntry(imageId) || image;
+    if (entry && !entry.segmented) {
+      const { btn } = findSuggestUi(imageId);
+      if (btn) btn.textContent = '⏳ Buscando fonte…';
+      await segmentImageWithAI(entry);
+      image = getCloudImageEntry(imageId) || image;
+    }
+  }
+  const b64 = await ensureImageB64(image);
+  if (!b64) {
+    toast('Não foi possível carregar a imagem da nuvem. Clique em Atualizar ou envie de novo.', 'err', 5500);
+    return;
+  }
+  const { btn, box } = findSuggestUi(imageId);
+  if (!btn || !box) {
+    toast('Não foi possível abrir o painel de sugestão nesta tela.', 'err', 5000);
+    return;
+  }
 
   if (box.classList.contains('show') && box.dataset.loaded === '1') {
     box.classList.toggle('show');
@@ -2810,7 +5155,8 @@ async function suggestQuestionForImage(imageId) {
       headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) },
       body: JSON.stringify({
         imageId,
-        imageBase64: getImageB64(image),
+        imageBase64: b64,
+        storagePath: image.storagePath || '',
         srcHint: image.sourceText || image.caption || image.src || '',
         caption: image.sourceText || image.caption || '',
         pageNumber: image.pageNumber || image.pageNum,
@@ -2830,7 +5176,7 @@ async function suggestQuestionForImage(imageId) {
         imageId,
         previewUrl: image.previewUrl,
         dataUri: image.dataUri,
-        base64: getImageB64(image),
+        base64: b64,
         caption: image.caption,
         pageNumber: image.pageNumber || image.pageNum,
         w: image.w,
@@ -2852,13 +5198,16 @@ async function suggestQuestionForImage(imageId) {
     btn.textContent = '💡 Esconder sugestão';
     syncBlockCardUI(imageId);
     updateBlockSelInfo();
-    toast('Questão sugerida — toque no card para incluir na prova.', 'ok', 4000);
+    await persistSavedExercise(block, image);
+    toast('Questão sugerida e salva em Exercícios.', 'ok', 4000);
     scheduleSaveBuilder();
     scheduleExamPreview();
   } catch (e) {
-    box.innerHTML = '<span style="color:var(--R)">Erro: ' + escHtml(e.message) + '</span>';
+    const friendly = humanizeIaApiError(e.message);
+    box.innerHTML = '<span style="color:var(--R)">Erro: ' + escHtml(friendly) + '</span>';
     box.classList.add('show');
     btn.textContent = '💡 Sugerir questão';
+    toast(friendly, 'err', 8000);
   } finally {
     btn.disabled = false;
   }
@@ -2879,6 +5228,7 @@ function updateBlockSelInfo() {
     inf.className = 'img-sel-info none';
     inf.textContent = '○ Use Sugerir questão em cada imagem; só blocos marcados entram na prova';
   }
+  renderExamVisualBuilder();
 }
 
 // Legado — geração principal não envia imagens soltas à IA
@@ -2917,26 +5267,45 @@ async function buildPrompt() {
       ? `\nFONTES ORIGINAIS DO MATERIAL (cite EXATAMENTE assim — NUNCA use o nome do arquivo):\n${bookSources.map(s=>'• '+s).join('\n')}\n`
       : '';
 
+    if (!pagesText || pagesText.trim().length < 150) {
+      throw new Error(
+        'Pouco texto extraído do capítulo. No Material, selecione o capítulo na lista e confira se as páginas estão marcadas (chips verdes).',
+      );
+    }
+
     const selectedBlocks = getSelectedImageBlocks().length;
     const imgBlock = selectedBlocks > 0
-      ? `\nQUESTÕES COM IMAGEM: o professor já selecionou ${selectedBlocks} bloco(s) imagem+questão na galeria — elas serão inseridas automaticamente no Word. Gere ${Math.max(0, st.numQ - selectedBlocks)} questão(ões) APENAS com contextualizador textual (trechos, dados, citações).`
-      : '\nIMAGENS: gere todas as questões com contextualizador textual. Questões com imagem do livro são criadas pelo professor na galeria (Sugerir questão) — NÃO use marcadores [IMAGEM] nem placeholders de imagem no texto.';
+      ? `Questões com imagem (${selectedBlocks}) já estão no builder — gere só ${Math.max(0, st.numQ - selectedBlocks)} questão(ões) textuais ancoradas no capítulo abaixo.`
+      : 'Todas as questões desta geração são textuais (figuras vêm do builder do professor).';
 
-    contentBlock = `
-CONTEÚDO EXTRAÍDO DO MATERIAL — ÚNICA FONTE PERMITIDA:
-Livro/Apostila: "${st.bookFileName}"
-${chTitle ? `Capítulo: ${chTitle}` : 'Trecho selecionado'}
-Páginas: ${pages.join(', ')} (${pages.length} pág.)
-${imgBlock}
+    st.chapterBrief = await analyzeChapterForExam({
+      chapterTitle: chTitle,
+      pagesText,
+      pages,
+    });
+
+    const core = getCore();
+    if (core?.buildChapterContentBlock) {
+      contentBlock = core.buildChapterContentBlock({
+        bookFileName: st.bookFileName,
+        chapterTitle: chTitle || manCap || 'Capítulo selecionado',
+        pages,
+        pagesText,
+        bookSources,
+        imageBlocksNote: imgBlock,
+        brief: st.chapterBrief,
+      });
+    } else {
+      contentBlock = `
+CONTEÚDO DO CAPÍTULO — ÚNICA FONTE:
+Livro: "${st.bookFileName}"
+Capítulo: ${chTitle || manCap}
+Páginas: ${pages.join(', ')}
 ${sourceBlock}
---- TEXTO EXTRAÍDO DAS PÁGINAS ---
-${pagesText.slice(0, 12000)}${pagesText.length > 12000 ? '\n[… texto abreviado …]' : ''}
---- FIM DO TEXTO ---
-
-REGRA ABSOLUTA: Use EXCLUSIVAMENTE o conteúdo acima.
-Fontes: cite as "FONTES ORIGINAIS DO MATERIAL" listadas acima — NUNCA invente fonte, NUNCA use o nome do arquivo.
-Se não houver fonte listada no material: NÃO inclua linha de Fonte. Omita completamente.
-`;
+--- TEXTO ---
+${pagesText.slice(0, 28000)}
+--- FIM ---`;
+    }
   } else {
     const topicos = v('f-topicos');
     contentBlock = `\nCONTEÚDO / TÓPICOS FORNECIDOS PELO PROFESSOR:\n${topicos}\n`;
@@ -3060,13 +5429,18 @@ ${src === 'livro' ? '- Use SOMENTE o conteúdo extraído acima. Não busque info
 
   const core = getCore();
   const numTextQ = Math.max(0, st.numQ - getSelectedImageBlocks().length);
+  const tplTotal = numTextQ > 0 ? numTextQ : st.numQ;
+  const template =
+    st.examTemplate ||
+    (core?.getAvBgeoTemplate ? core.getAvBgeoTemplate(tplTotal, serie) : null);
   if (core) {
     const textPrompt = core.buildTextExamPrompt({
       metadata: getExamMetadata(),
       contentBlock,
       numTextQuestions: numTextQ,
-      template: st.examTemplate,
+      template,
       headerHints: getCab(),
+      bnccPrefs: getBnccPrefsFromUI(),
     });
     return { prompt: textPrompt, images: [] };
   }
@@ -3084,6 +5458,11 @@ async function gerarProva() {
     ? (st.selectedPages.size > 0 || v('f-cap-manual').trim())
     : v('f-topicos').trim().length > 0;
 
+  if (src === 'livro' && st.selectedPages.size === 0) {
+    toast('Selecione um capítulo no Material (lista de capítulos) para o sistema ler o conteúdo antes de gerar.', 'err', 6000);
+    return;
+  }
+
   if (!disc || !serie || !hasContent) {
     document.getElementById('form-err').style.display = '';
     return;
@@ -3094,7 +5473,15 @@ async function gerarProva() {
   const token = currentSession.access_token;
 
   showView('loading');
-  document.getElementById('load-desc').textContent = `${disc} · ${serie} · ${st.numQ} questões`;
+  const coreTpl = getCore();
+  const tplHint = coreTpl?.describeBnccMix
+    ? coreTpl.describeBnccMix(coreTpl.getBnccExamTemplate(st.numQ, serie))
+    : coreTpl?.describeAvBgeoMix
+      ? coreTpl.describeAvBgeoMix(coreTpl.getAvBgeoTemplate(st.numQ, serie))
+      : '';
+  document.getElementById('load-desc').textContent = tplHint
+    ? `${disc} · ${serie} · ${tplHint}`
+    : `${disc} · ${serie} · ${st.numQ} questões`;
   document.getElementById('stream-prev').innerHTML = '';
   ['tk-q','tk-words','tk-chars'].forEach(id => document.getElementById(id).textContent = '0');
 
@@ -3109,6 +5496,8 @@ async function gerarProva() {
     });
   }
 
+  document.getElementById('load-desc').textContent =
+    `${disc} · ${serie} · Lendo capítulo e elaborando questões (AV1º BGEO)...`;
   const { prompt: promptText } = await buildPrompt();
   const promptImages = [];
   let accumulated = '';
@@ -3171,6 +5560,13 @@ async function gerarProva() {
     showView('result');
     rTab('preview');
     scheduleExamPreview();
+
+    const examAfter = buildStateExamModel();
+    if (examAfter?.questions?.length) {
+      st.numQ = examAfter.questions.length;
+      const nvEl = document.getElementById('nv');
+      if (nvEl) nvEl.textContent = st.numQ;
+    }
 
     // Auto-save em Minhas provas
     saveDraft();
@@ -3311,6 +5707,297 @@ function rTab(t) {
   document.getElementById('rtab-preview')?.classList.toggle('on', t === 'preview');
   document.getElementById('rtab-gab')?.classList.toggle('on', t === 'gab');
   if (t === 'preview') refreshExamPreview();
+}
+
+// ══════════════════════════════════════════════
+// EXERCÍCIOS SALVOS
+// ══════════════════════════════════════════════
+const EXERCISES_LS_KEY = 'pedagia_saved_exercises_v1';
+
+function exercisesLocalKey() {
+  return `${EXERCISES_LS_KEY}_${currentSession?.user?.id || 'anon'}`;
+}
+
+function loadExercisesFromLocal() {
+  try {
+    const raw = localStorage.getItem(exercisesLocalKey());
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveExercisesToLocal(items) {
+  try {
+    localStorage.setItem(exercisesLocalKey(), JSON.stringify(items.slice(0, 200)));
+  } catch {}
+}
+
+function formatExercisePreviewText(question) {
+  if (!question) return '';
+  const alts = (question.alternatives || []).map((a) => `${a.letter}) ${a.text}`).join('\n');
+  return `${question.statement}\n\n${alts}\n\nGabarito: ${question.correctAnswer || '?'}`;
+}
+
+async function persistSavedExercise(block, image) {
+  const token = currentSession?.access_token;
+  if (!token) return;
+
+  const body = {
+    image_id: block.imageId,
+    storage_path: image.storagePath || '',
+    image_title: image.title || image.caption || image.sourceText || '',
+    page_number: image.pageNumber || image.pageNum || null,
+    disciplina: v('f-disc'),
+    serie: v('f-serie'),
+    question: block.question,
+    block_id: block.blockId,
+  };
+
+  const localEntry = {
+    id: `local_${Date.now()}_${block.imageId}`,
+    ...body,
+    created_at: new Date().toISOString(),
+    _local: true,
+  };
+
+  try {
+    const r = await fetch('/api/exercicios', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (r.status === 503) {
+        const items = loadExercisesFromLocal();
+        items.unshift(localEntry);
+        saveExercisesToLocal(items);
+        toast('Salvo localmente — execute schema-v2 no Supabase para sincronizar na nuvem.', 'ok', 5000);
+      } else {
+        console.warn('persistSavedExercise', data.error || r.status);
+      }
+      return;
+    }
+    if (st.exerciciosData && Array.isArray(st.exerciciosData)) {
+      st.exerciciosData.unshift(data);
+      renderExercicios(st.exerciciosData);
+    }
+  } catch (e) {
+    console.warn('persistSavedExercise', e);
+    const items = loadExercisesFromLocal();
+    items.unshift(localEntry);
+    saveExercisesToLocal(items);
+  }
+}
+
+async function resolveExerciseThumbUrl(ex) {
+  if (ex._thumbUrl) return ex._thumbUrl;
+  const catalog = getImageCatalogEntry(ex.image_id);
+  if (catalog?.previewUrl) {
+    ex._thumbUrl = catalog.previewUrl;
+    return ex._thumbUrl;
+  }
+  const cloud = typeof window !== 'undefined' ? window.PedagiaCloud : null;
+  if (cloudReady() && ex.storage_path && cloud?.signedUrl) {
+    try {
+      ex._thumbUrl = await cloud.signedUrl(ex.storage_path);
+      return ex._thumbUrl;
+    } catch (e) {
+      console.warn('exercise thumb', e);
+    }
+  }
+  return '';
+}
+
+async function loadExercicios() {
+  const token = currentSession?.access_token;
+  const list = document.getElementById('exercicios-list');
+  const status = document.getElementById('exercicios-status');
+  if (!token) {
+    if (list) list.innerHTML = '<div class="exercicios-empty">Faça login para ver exercícios salvos.</div>';
+    return;
+  }
+  if (list) list.innerHTML = '<div class="exercicios-empty">Carregando...</div>';
+  if (status) status.textContent = 'Carregando...';
+
+  let items = [];
+  let cloudOk = true;
+  try {
+    const r = await fetch('/api/exercicios', { headers: { Authorization: 'Bearer ' + token } });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (r.status === 503) {
+        cloudOk = false;
+        items = loadExercisesFromLocal();
+      } else {
+        throw new Error(data.error || `Erro ${r.status}`);
+      }
+    } else {
+      items = Array.isArray(data) ? data : [];
+      const local = loadExercisesFromLocal().filter((x) => x._local);
+      if (local.length) items = [...local, ...items];
+    }
+  } catch (e) {
+    if (list) list.innerHTML = `<div class="exercicios-empty" style="color:var(--R)">Erro: ${escHtml(e.message)}</div>`;
+    if (status) status.textContent = 'Erro ao carregar';
+    return;
+  }
+
+  st.exerciciosData = items;
+  if (status) {
+    status.textContent = cloudOk
+      ? `${items.length} exercício(s) salvo(s)`
+      : `${items.length} local(is) — rode schema-v2-material.sql no Supabase`;
+  }
+  renderExercicios(items);
+}
+
+function filterExercicios() {
+  const q = (document.getElementById('exercicios-search')?.value || '').toLowerCase();
+  const items = (st.exerciciosData || []).filter((ex) => {
+    const stmt = ex.question?.statement || '';
+    const title = ex.image_title || '';
+    const disc = ex.disciplina || '';
+    const serie = ex.serie || '';
+    return [stmt, title, disc, serie, ex.image_id].some((s) => String(s).toLowerCase().includes(q));
+  });
+  renderExercicios(items);
+}
+
+function renderExercicios(items) {
+  const list = document.getElementById('exercicios-list');
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML =
+      '<div class="exercicios-empty">Nenhum exercício salvo ainda. Use &quot;Sugerir questão&quot; em Minhas mídias ou no Material.</div>';
+    return;
+  }
+
+  list.innerHTML = items
+    .map(
+      (ex) => `
+    <article class="exercicio-card" data-id="${escHtml(ex.id)}">
+      <div class="exercicio-card-head">
+        <div class="exercicio-thumb-wrap" id="ex-thumb-${escHtml(ex.id)}">
+          <span class="exercicio-thumb-ph">🖼</span>
+        </div>
+        <div class="exercicio-meta">
+          <div class="exercicio-title">${escHtml(ex.image_title || ex.image_id || 'Figura')}</div>
+          <div class="exercicio-sub">${escHtml(ex.disciplina || '—')} · ${escHtml(ex.serie || '')}${ex.page_number ? ` · p.${ex.page_number}` : ''}</div>
+          <div class="exercicio-date">${new Date(ex.created_at).toLocaleString('pt-BR')}</div>
+        </div>
+        <button type="button" class="hist-del" title="Apagar" onclick="event.stopPropagation();delExercicio('${escHtml(ex.id)}', ${ex._local ? 'true' : 'false'})">🗑</button>
+      </div>
+      <div class="exercicio-body">${escHtml(formatExercisePreviewText(ex.question)).replace(/\n/g, '<br>')}</div>
+      <div class="exercicio-actions">
+        <button type="button" class="chip cy" onclick="includeExerciseInProva('${escHtml(ex.id)}')">✓ Incluir na prova</button>
+        <button type="button" class="chip" onclick="copyExerciseText('${escHtml(ex.id)}')">📋 Copiar</button>
+      </div>
+    </article>`,
+    )
+    .join('');
+
+  items.forEach((ex) => {
+    resolveExerciseThumbUrl(ex).then((url) => {
+      if (!url) return;
+      const wrap = document.getElementById('ex-thumb-' + ex.id);
+      if (!wrap) return;
+      wrap.innerHTML = `<img src="${url}" alt="" loading="lazy" class="exercicio-thumb">`;
+    });
+  });
+}
+
+async function exerciseToBlock(ex) {
+  let image = getCloudImageEntry(ex.image_id) || getImageCatalogEntry(ex.image_id);
+  if (!image && ex.storage_path) {
+    image = { imageId: ex.image_id, storagePath: ex.storage_path, title: ex.image_title };
+  }
+  if (image && !getImageCatalogEntry(ex.image_id)) {
+    await useCloudImageInBuilder(ex.image_id, { silent: true });
+    image = getCloudImageEntry(ex.image_id) || image;
+  }
+  const b64 = image ? await ensureImageB64(image) : '';
+  const block = {
+    blockId: ex.block_id || `block_${ex.image_id}_${Date.now()}`,
+    selected: true,
+    imageId: ex.image_id,
+    image: {
+      imageId: ex.image_id,
+      previewUrl: image?.previewUrl,
+      dataUri: image?.dataUri,
+      base64: b64,
+      caption: image?.caption || ex.image_title,
+      pageNumber: ex.page_number || image?.pageNumber,
+      w: image?.w,
+      h: image?.h,
+      storagePath: ex.storage_path || image?.storagePath,
+    },
+    question: ex.question,
+  };
+  return block;
+}
+
+async function includeExerciseInProva(id) {
+  const ex = (st.exerciciosData || []).find((x) => String(x.id) === String(id));
+  if (!ex) {
+    toast('Exercício não encontrado.', 'err');
+    return;
+  }
+  try {
+    const block = await exerciseToBlock(ex);
+    upsertImageBlock(block);
+    const imgEntry = getImageCatalogEntry(ex.image_id);
+    if (imgEntry) imgEntry.savedToBuilder = true;
+    syncBlockCardUI(ex.image_id);
+    updateBlockSelInfo();
+    scheduleSaveBuilder();
+    scheduleExamPreview();
+    goTo('form');
+    toast('Exercício incluído na prova (marcado no builder).', 'ok', 4000);
+  } catch (e) {
+    toast('Erro ao incluir: ' + (e.message || e), 'err', 5000);
+  }
+}
+
+function copyExerciseText(id) {
+  const ex = (st.exerciciosData || []).find((x) => String(x.id) === String(id));
+  if (!ex?.question) return;
+  const text = formatExercisePreviewText(ex.question);
+  navigator.clipboard?.writeText(text).then(
+    () => toast('Texto copiado.', 'ok'),
+    () => toast('Não foi possível copiar.', 'err'),
+  );
+}
+
+async function delExercicio(id, isLocal) {
+  if (!confirm('Apagar este exercício salvo?')) return;
+  if (isLocal || String(id).startsWith('local_')) {
+    const items = loadExercisesFromLocal().filter((x) => String(x.id) !== String(id));
+    saveExercisesToLocal(items);
+    st.exerciciosData = (st.exerciciosData || []).filter((x) => String(x.id) !== String(id));
+    renderExercicios(st.exerciciosData);
+    toast('Exercício removido.', 'ok');
+    return;
+  }
+  const token = currentSession?.access_token;
+  if (!token) return;
+  try {
+    const r = await fetch(`/api/exercicios/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `Erro ${r.status}`);
+    st.exerciciosData = (st.exerciciosData || []).filter((x) => String(x.id) !== String(id));
+    renderExercicios(st.exerciciosData);
+    const status = document.getElementById('exercicios-status');
+    if (status) status.textContent = `${st.exerciciosData.length} exercício(s) salvo(s)`;
+    toast('Exercício removido.', 'ok');
+  } catch (e) {
+    toast('Erro ao apagar: ' + e.message, 'err');
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -4868,22 +7555,52 @@ function attachPedagiaGlobals() {
     goTo, showView, rTab, saveCab,
     setHtab, setSrc, setDif, updateDist,
     handleTemplateFile, removeTemplate, handleBookFile,
-    handleCIExam, handleCIBook, lerSum,
+    handleCIExam, handleCIBook, lerSum, pularSumarioUsarTodasPaginas,
     saveHeaderToLibrary, onHeaderSelectChange, deleteHeaderFromLibrary, applyHeader,
     exportDocxTemplate, clearBuilderData, clearSavedBuilder,
     onProvaTextEdit, scheduleExamPreview, refreshExamPreview,
     openProva, delProva, filterHist,
     togImgBlockCard, saveImageToBuilder, suggestQuestionForImage, togP,
     showImageReviewPanel, persistMaterialChapters,
+    switchMaterial, startNewMaterial, fetchMaterialsList,
     openCropBuilder, closeCropBuilder, confirmCropSelection, resetCropSelection,
     openImageNameModal, closeImageNameModal, confirmImageCatalogEntry,
+    refreshCloudImagesDashboard, refreshMidiasPage, filterMidiasByName, selectAllMidiasVisible,
+    clearMidiasSelection, toggleMidiaSelection, deleteSelectedMidias,
+    useCloudImageInBuilder, openCloudImageModal,
+    deleteCloudImage, handleMidiasUpload,
+    setMidiaGenCategory, generateMidiaVisual, saveGeneratedMidiaToCloud,
+    loadExercicios, filterExercicios, includeExerciseInProva, copyExerciseText, delExercicio,
+    onBnccPrefsChange, moveExamPlanItem, toggleExamPlanBlock,
+    evbSetFilter, evbSelectAllBlocks, evbClearAllBlocks, evbSuggestOrder,
     toast,
   });
 }
 
+/** Reaplica barra/app após o React remontar o DOM (ex.: fim do overlay de carregamento). */
+export function reconcilePedagiaSessionUi() {
+  if (currentSession?.user) {
+    onLogin(currentSession, { skipTplToast: true });
+    return;
+  }
+  if (_authBootstrapSettled && _sb) {
+    void recoverSessionWithRefresh().then((session) => {
+      if (session?.user) onLogin(session, { skipTplToast: true });
+      else if (_authBootstrapSettled) showLoggedOutShell();
+    });
+  }
+}
+
+let _bootPromise = null;
+
 export async function bootPedagiaLegacy() {
-  attachPedagiaGlobals();
-  await init();
+  if (!_bootPromise) {
+    _bootPromise = (async () => {
+      attachPedagiaGlobals();
+      await init();
+    })();
+  }
+  return _bootPromise;
 }
 
 if (typeof window !== 'undefined') {
