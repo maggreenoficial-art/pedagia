@@ -1175,6 +1175,8 @@ function syncNavPills(view) {
 }
 function goTo(view) {
   if (!currentSession) { showView('auth'); return; }
+  // Fluxo antigo "Nova prova" unificado no Montar.
+  if (view === 'form') view = 'builder';
   if (view === 'builder') {
     showView('builder');
     syncNavPills('builder');
@@ -1987,6 +1989,79 @@ function serializeCatalogImage(img) {
   };
 }
 
+/** Estado do Montar (pool de questões revisadas) — texto puro, leve para a nuvem. */
+function collectMontarState() {
+  return {
+    pagesConfirmed: !!st.builderPagesConfirmed,
+    confirmedPageList: [...(st.builderConfirmedPageList || [])],
+    wantAdapted: !!st.builderWantAdapted,
+    adaptNotes: document.getElementById('bd-adapt-notas')?.value || '',
+    numQ: st.numQ || 10,
+    disc: v('bd-disc') || v('f-disc') || '',
+    serie: v('bd-serie') || v('f-serie') || '',
+    tipo: v('bd-tipo') || v('f-tipo') || '',
+    valor: v('bd-valor') || v('f-valor') || '',
+    topicos: v('bd-topicos') || '',
+    pool: (st.builderPool || []).map((p) => ({
+      id: p.id,
+      source: p.source,
+      variant: p.variant || 'turma',
+      exerciseId: p.exerciseId,
+      imageId: p.imageId,
+      inProva: !!p.inProva,
+      reviewStatus: p.reviewStatus || 'pending',
+      type: p.type,
+      title: p.title || '',
+      statement: p.statement || '',
+      alternatives: p.alternatives || [],
+      correctAnswer: p.correctAnswer || '',
+      justification: p.justification || '',
+    })),
+    mediaDrafts: Object.fromEntries(
+      Object.entries(st.builderMediaDrafts || {})
+        .filter(([, d]) => d && !d.loading)
+        .map(([id, d]) => [
+          id,
+          { question: d.question, reviewStatus: d.reviewStatus, type: d.type, blockId: d.blockId },
+        ]),
+    ),
+    selectedMedia: [...(st.builderSelectedMedia || [])],
+    selectedExercises: [...(st.builderSelectedExercises || [])],
+  };
+}
+
+function applyMontarState(m) {
+  if (!m || typeof m !== 'object') return false;
+  st.builderPagesConfirmed = !!m.pagesConfirmed;
+  st.builderConfirmedPageList = Array.isArray(m.confirmedPageList) ? m.confirmedPageList : [];
+  st.builderWantAdapted = !!m.wantAdapted;
+  st.builderPool = Array.isArray(m.pool) ? m.pool : [];
+  st.builderMediaDrafts = m.mediaDrafts && typeof m.mediaDrafts === 'object' ? m.mediaDrafts : {};
+  st.builderSelectedMedia = new Set(m.selectedMedia || []);
+  st.builderSelectedExercises = new Set(m.selectedExercises || []);
+  if (m.numQ) st.numQ = m.numQ;
+  if (m.pagesConfirmed && m.confirmedPageList?.length && !(st.selectedPages?.size)) {
+    st.selectedPages = new Set(m.confirmedPageList);
+  }
+
+  const fields = [
+    ['bd-disc', m.disc], ['f-disc', m.disc],
+    ['bd-serie', m.serie], ['f-serie', m.serie],
+    ['bd-tipo', m.tipo], ['f-tipo', m.tipo],
+    ['bd-valor', m.valor], ['f-valor', m.valor],
+    ['bd-topicos', m.topicos], ['bd-adapt-notas', m.adaptNotes],
+  ];
+  for (const [id, val] of fields) {
+    const el = document.getElementById(id);
+    if (el && val && !el.value) el.value = val;
+  }
+  const cb = document.getElementById('bd-adaptada');
+  if (cb) cb.checked = st.builderWantAdapted;
+  const bdN = document.getElementById('bd-numq');
+  if (bdN) bdN.textContent = String(st.numQ || 10);
+  return true;
+}
+
 function collectBuilderSnapshot() {
   const keepIds = new Set();
   for (const b of st.imageQuestionBlocks) keepIds.add(b.imageId);
@@ -1995,6 +2070,7 @@ function collectBuilderSnapshot() {
   }
 
   return {
+    montar: collectMontarState(),
     bookFileName: st.bookFileName,
     bookTotalPages: st.bookTotalPages,
     sumarioPage: parseInt(document.getElementById('pg')?.value, 10) || null,
@@ -2073,7 +2149,7 @@ async function saveBookToStorage(file) {
 }
 
 async function saveBuilderToStorage() {
-  if (!st.bookFileName) return;
+  if (!st.bookFileName && !st.builderPool?.length && !st.builderPagesConfirmed) return;
   const snap = collectBuilderSnapshot();
   if (window.indexedDB) {
     await dbPut(BUILDER_STORE, builderStorageKey(), snap);
@@ -2262,6 +2338,7 @@ async function applyBuilderSnapshot(snap) {
     }
   }
 
+  if (snap.montar) applyMontarState(snap.montar);
   if (snap.examPlanOrder) st.examPlanOrder = snap.examPlanOrder;
   if (snap.bnccPrefs) {
     const o = snap.bnccPrefs;
@@ -5773,6 +5850,7 @@ function builderInvalidatePagesConfirm() {
   st.builderConfirmedPageList = [];
   st.builderPool = (st.builderPool || []).filter((p) => p.source !== 'ai');
   builderUpdateQuestoesUI();
+  scheduleSaveBuilder();
 }
 
 function builderOnTopicosInput() {
@@ -5785,6 +5863,7 @@ function builderOnAdaptadaToggle() {
   const notes = document.getElementById('bd-adapt-notas');
   st.builderWantAdapted = !!cb?.checked;
   if (notes) notes.style.display = st.builderWantAdapted ? '' : 'none';
+  scheduleSaveBuilder();
 }
 
 function builderUpdateQuestoesUI() {
@@ -5882,6 +5961,7 @@ async function builderConfirmPages() {
   if (cropSec) cropSec.style.display = '';
   builderUpdateQuestoesUI();
   builderRenderBdCropGallery();
+  scheduleSaveBuilder();
   toast(`${st.builderConfirmedPageList.length} página(s) confirmadas para extração.`, 'ok', 4000);
 }
 
@@ -6283,6 +6363,7 @@ async function builderApproveMediaExercise(imageId) {
   }
   builderRenderMidias();
   builderRenderExercises();
+  scheduleSaveBuilder();
   toast('Exercício aprovado — revise na seção ⑥ para incluir na prova.', 'ok', 5000);
 }
 
@@ -6296,6 +6377,7 @@ function builderRejectMediaExercise(imageId) {
   if (block) block.selected = false;
   builderRenderMidias();
   if (st.builderPagesConfirmed) builderRenderPool();
+  scheduleSaveBuilder();
   toast('Exercício rejeitado.', 'ok');
 }
 
@@ -6315,6 +6397,7 @@ function builderSetMediaDraftType(imageId, type) {
   const block = st.imageQuestionBlocks.find((b) => b.imageId === imageId);
   if (block?.question) block.question.type = draft.type;
   builderRenderMidias();
+  scheduleSaveBuilder();
 }
 
 function builderRenderExercises() {
@@ -6488,6 +6571,7 @@ function builderApprovePoolItem(id) {
   q.reviewStatus = 'approved';
   q.inProva = true;
   builderRenderPool();
+  scheduleSaveBuilder();
 }
 
 function builderRejectPoolItem(id) {
@@ -6496,6 +6580,7 @@ function builderRejectPoolItem(id) {
   q.reviewStatus = 'rejected';
   q.inProva = false;
   builderRenderPool();
+  scheduleSaveBuilder();
 }
 
 function builderUndoPoolItem(id) {
@@ -6504,6 +6589,7 @@ function builderUndoPoolItem(id) {
   q.reviewStatus = 'pending';
   q.inProva = false;
   builderRenderPool();
+  scheduleSaveBuilder();
 }
 
 function builderSetPoolItemType(id, type) {
@@ -6511,6 +6597,7 @@ function builderSetPoolItemType(id, type) {
   if (!q) return;
   q.type = type === 'discursive' ? 'discursive' : 'multiple_choice';
   builderRenderPool();
+  scheduleSaveBuilder();
 }
 
 function builderToggleInProva(id, checked) {
@@ -6519,6 +6606,7 @@ function builderToggleInProva(id, checked) {
   q.inProva = !!checked;
   q.reviewStatus = checked ? 'approved' : 'pending';
   builderRenderPool();
+  scheduleSaveBuilder();
 }
 
 async function builderGerarQuestoes() {
@@ -6588,6 +6676,7 @@ async function builderGerarQuestoes() {
     );
     builderSetPoolTab('turma');
     builderUpdateQuestoesUI();
+    scheduleSaveBuilder();
     document.getElementById('bd-questoes-block')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (e) {
     toast('Erro: ' + e.message, 'err');
@@ -6689,6 +6778,22 @@ async function builderMontarProva(variant) {
   }
 }
 
+async function restoreMontarStateIfEmpty() {
+  if (st.builderPool?.length || st.builderPagesConfirmed) return false;
+  try {
+    let snap = null;
+    if (cloudReady()) snap = await PedagiaCloud.loadBuilderState(st.materialId);
+    if (!snap && window.indexedDB) snap = await dbGet(BUILDER_STORE, builderStorageKey());
+    if (snap?.montar && (snap.montar.pool?.length || snap.montar.pagesConfirmed)) {
+      applyMontarState(snap.montar);
+      return true;
+    }
+  } catch (e) {
+    console.warn('restore montar', e);
+  }
+  return false;
+}
+
 async function initBuilderView() {
   if (!currentSession) return;
   builderLoadFields();
@@ -6703,6 +6808,11 @@ async function initBuilderView() {
     } catch (e) {
       console.warn('builder preload pdf', e);
     }
+  }
+  const restored = await restoreMontarStateIfEmpty();
+  if (restored) {
+    const n = (st.builderPool || []).length;
+    if (n) toast(`Montar restaurado: ${n} questão(ões) na lista.`, 'ok', 4000);
   }
   builderRenderMaterialSelect();
   builderRenderPageChips();
@@ -7580,10 +7690,11 @@ async function includeExerciseInProva(id) {
     if (imgEntry) imgEntry.savedToBuilder = true;
     syncBlockCardUI(ex.image_id);
     updateBlockSelInfo();
+    st.builderSelectedExercises.add(ex.id);
     scheduleSaveBuilder();
     scheduleExamPreview();
-    goTo('form');
-    toast('Exercício incluído na prova (marcado no builder).', 'ok', 4000);
+    goTo('builder');
+    toast('Exercício adicionado ao Montar — revise na seção ⑥.', 'ok', 4500);
   } catch (e) {
     toast('Erro ao incluir: ' + (e.message || e), 'err', 5000);
   }

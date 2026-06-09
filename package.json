@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "node --experimental-strip-types --test \"tests/*.test.mjs\"",
     "extract-legacy": "node scripts/extract-legacy.mjs && node scripts/extract-markup.mjs"
   },
   "dependencies": {
