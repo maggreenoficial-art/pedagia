@@ -2033,7 +2033,9 @@ function collectMontarState() {
 function applyMontarState(m) {
   if (!m || typeof m !== 'object') return false;
   st.builderPagesConfirmed = !!m.pagesConfirmed;
-  st.builderConfirmedPageList = Array.isArray(m.confirmedPageList) ? m.confirmedPageList : [];
+  st.builderConfirmedPageList = Array.isArray(m.confirmedPageList)
+    ? m.confirmedPageList.map((p) => parseInt(String(p), 10)).filter((n) => Number.isFinite(n) && n >= 1)
+    : [];
   st.builderWantAdapted = !!m.wantAdapted;
   st.builderPool = Array.isArray(m.pool) ? m.pool : [];
   st.builderMediaDrafts = m.mediaDrafts && typeof m.mediaDrafts === 'object' ? m.mediaDrafts : {};
@@ -2041,7 +2043,10 @@ function applyMontarState(m) {
   st.builderSelectedExercises = new Set(m.selectedExercises || []);
   if (m.numQ) st.numQ = m.numQ;
   if (m.pagesConfirmed && m.confirmedPageList?.length && !(st.selectedPages?.size)) {
-    st.selectedPages = new Set(m.confirmedPageList);
+    st.selectedPages = new Set(st.builderConfirmedPageList);
+  }
+  if (st.bookPdf?.numPages && st.builderConfirmedPageList.length) {
+    st.builderConfirmedPageList = normalizePdfPageList(st.builderConfirmedPageList, st.bookPdf.numPages);
   }
 
   const fields = [
@@ -3079,6 +3084,7 @@ async function loadMaterialWorkspace(mat, opts = {}) {
   st.bookFile = null;
   const hasBook = await loadBookFromStorage();
   if (hasBook) {
+    if (st.bookPdf?.numPages) st.bookTotalPages = st.bookPdf.numPages;
     showBookLoadedUI(true);
     if (st.bookChapters.length) {
       renderChapterList(st.bookChapters, 'chapter-list', selectChapter);
@@ -4099,24 +4105,98 @@ function onManualCap() {
 }
 
 // ── Extract text from selected pages ─────────────────
-async function extractSelectedPages() {
-  if (!st.bookPdf || st.selectedPages.size === 0) return '';
-  const pages = [...st.selectedPages].sort((a,b) => a-b);
-  let text = '';
+function getPdfPageMax() {
+  return st.bookPdf?.numPages || st.bookTotalPages || 0;
+}
+
+function normalizePdfPageList(pages, maxPages) {
+  const max = maxPages || getPdfPageMax() || 0;
+  const nums = [...new Set(
+    (pages || [])
+      .map((p) => parseInt(String(p), 10))
+      .filter((n) => Number.isFinite(n) && n >= 1 && (!max || n <= max)),
+  )].sort((a, b) => a - b);
+  return nums;
+}
+
+async function extractTextFromPdfPages(pdf, pageNumbers) {
+  const stats = {
+    requested: (pageNumbers || []).length,
+    maxPages: pdf?.numPages || 0,
+    normalized: 0,
+    withText: 0,
+    chars: 0,
+    rawChars: 0,
+    outOfRange: [],
+  };
+  if (!pdf || !pageNumbers?.length) return { text: '', rawText: '', stats };
+
+  const max = pdf.numPages || 0;
+  const outOfRange = [];
+  for (const p of pageNumbers) {
+    const n = parseInt(String(p), 10);
+    if (!Number.isFinite(n) || n < 1 || n > max) outOfRange.push(p);
+  }
+  stats.outOfRange = outOfRange;
+
+  const pages = normalizePdfPageList(pageNumbers, max);
+  stats.normalized = pages.length;
+
+  let rawText = '';
   for (const p of pages) {
     try {
-      const page = await st.bookPdf.getPage(p);
-      const ct   = await page.getTextContent();
-      let pt = ''; let lx = null;
+      const page = await pdf.getPage(p);
+      const ct = await page.getTextContent();
+      let pt = '';
+      let lx = null;
       for (const item of ct.items) {
         if (lx !== null && Math.abs(item.transform[4] - lx) > 8) pt += ' ';
-        pt += item.str; lx = item.transform[4] + (item.width||0);
+        pt += item.str;
+        lx = item.transform[4] + (item.width || 0);
       }
-      text += `[Página ${p}]\n${pt.trim()}\n\n`;
-    } catch {}
+      const body = pt.trim();
+      if (body.length > 15) stats.withText += 1;
+      rawText += `[Página ${p}]\n${body}\n\n`;
+    } catch (e) {
+      console.warn('extractTextFromPdfPages p.' + p, e);
+    }
   }
+  stats.rawChars = rawText.trim().length;
+
   const core = getCore();
-  if (core?.cleanFullChapterText) return core.cleanFullChapterText(text);
+  const text = core?.cleanFullChapterText ? core.cleanFullChapterText(rawText) : rawText;
+  stats.chars = text.trim().length;
+  return { text, rawText, stats };
+}
+
+function builderPdfTextError(stats, pages) {
+  const max = stats.maxPages || getPdfPageMax();
+  if (stats.outOfRange?.length) {
+    return (
+      `${stats.outOfRange.length} página(s) fora do PDF (máx. ${max}): ${stats.outOfRange.slice(0, 8).join(', ')}` +
+      (stats.outOfRange.length > 8 ? '…' : '') +
+      '. Ajuste o intervalo no passo ② (use páginas do PDF, não só as impressas no livro).'
+    );
+  }
+  if (stats.normalized === 0) {
+    return `Nenhuma página válida no PDF (${max} pág.). Confirme o intervalo novamente no passo ②.`;
+  }
+  if (stats.withText === 0) {
+    return (
+      `As ${stats.normalized} página(s) confirmadas não têm texto selecionável no PDF — costuma ser livro digitalizado (só imagem). ` +
+      'Use "Ou conteúdo escrito" no passo ②, escolha outras páginas ou envie um PDF com texto copiável.'
+    );
+  }
+  return (
+    `Pouco texto extraído (${stats.chars} caracteres em ${stats.withText}/${stats.normalized} páginas). ` +
+    'Escolha páginas com mais conteúdo ou cole um resumo em "Ou conteúdo escrito".'
+  );
+}
+
+async function extractSelectedPages() {
+  if (!st.bookPdf || st.selectedPages.size === 0) return '';
+  const pages = [...st.selectedPages].sort((a, b) => a - b);
+  const { text } = await extractTextFromPdfPages(st.bookPdf, pages);
   return text;
 }
 
@@ -5921,6 +6001,7 @@ async function ensureMaterialPdfLoaded() {
       'PDF do livro não disponível. Abra a aba Material, selecione o livro (ou envie o PDF de novo) e volte ao Montar.',
     );
   }
+  if (st.bookPdf?.numPages) st.bookTotalPages = st.bookPdf.numPages;
   return true;
 }
 
@@ -5956,7 +6037,23 @@ async function builderConfirmPages() {
     }
   }
   st.builderPagesConfirmed = true;
-  st.builderConfirmedPageList = [...st.selectedPages].sort((a, b) => a - b);
+  st.builderConfirmedPageList = normalizePdfPageList([...st.selectedPages], getPdfPageMax());
+  if (!st.builderConfirmedPageList.length) {
+    st.builderPagesConfirmed = false;
+    toast('Nenhuma página válida no PDF. Verifique o intervalo (páginas do arquivo PDF).', 'err', 6000);
+    return;
+  }
+  const sample = await extractTextFromPdfPages(
+    st.bookPdf,
+    st.builderConfirmedPageList.slice(0, Math.min(3, st.builderConfirmedPageList.length)),
+  );
+  if (sample.stats.withText === 0) {
+    toast(
+      'Aviso: estas páginas não têm texto selecionável (PDF pode ser só imagem). Use "Ou conteúdo escrito" ou outras páginas.',
+      'err',
+      8000,
+    );
+  }
   const cropSec = document.getElementById('bd-crop-section');
   if (cropSec) cropSec.style.display = '';
   builderUpdateQuestoesUI();
@@ -6069,7 +6166,7 @@ async function builderApplyPages() {
       return;
     }
   }
-  const max = st.bookTotalPages || st.bookPdf?.numPages || 0;
+  const max = getPdfPageMax();
   if (!max) {
     toast('Selecione um material com PDF carregado.', 'err');
     return;
@@ -6093,7 +6190,7 @@ async function builderApplyPages() {
   builderUpdateQuestoesUI();
   const cropSec = document.getElementById('bd-crop-section');
   if (cropSec && st.bookPdf) cropSec.style.display = '';
-  toast(`${hi - lo + 1} página(s) marcadas — confirme para liberar a IA.`, 'ok');
+  toast(`${hi - lo + 1} página(s) marcadas (PDF: 1–${max}) — confirme para liberar a IA.`, 'ok');
 }
 
 async function builderOnHeaderChange(id) {
@@ -6846,27 +6943,27 @@ async function buildBuilderExamContentBlock() {
   if (topicos) {
     return `\nCONTEÚDO / TÓPICOS FORNECIDOS PELO PROFESSOR:\n${topicos}\n`;
   }
-  const pages = [...(st.builderConfirmedPageList || [])].sort((a, b) => a - b);
-  if (!pages.length) {
+  if (!st.builderConfirmedPageList?.length) {
     throw new Error('Confirme as páginas do livro no passo ② antes de gerar questões.');
   }
   await ensureMaterialPdfLoaded();
-  const savedPages = st.selectedPages;
-  st.selectedPages = new Set(pages);
-  let pagesText = '';
-  try {
-    pagesText = await extractSelectedPages();
-  } finally {
-    st.selectedPages = savedPages;
+  if (st.bookPdf?.numPages) st.bookTotalPages = st.bookPdf.numPages;
+  const maxPages = getPdfPageMax();
+  const pages = normalizePdfPageList(st.builderConfirmedPageList, maxPages);
+  if (!pages.length) {
+    throw new Error(
+      `Nenhuma página válida no PDF (${maxPages} pág.). Confirme o intervalo novamente no passo ②.`,
+    );
   }
+  st.builderConfirmedPageList = pages;
+  const { text: pagesText, stats } = await extractTextFromPdfPages(st.bookPdf, pages);
   const bookSources = extractSources(pagesText);
   const sourceBlock = bookSources.length
     ? `\nFONTES ORIGINAIS DO MATERIAL (cite EXATAMENTE assim — NUNCA use o nome do arquivo):\n${bookSources.map((s) => '• ' + s).join('\n')}\n`
     : '';
-  if (!pagesText || pagesText.trim().length < 80) {
-    throw new Error(
-      'Pouco texto nas páginas confirmadas. Escolha outras páginas ou use conteúdo escrito.',
-    );
+  const minChars = Math.min(80, Math.max(40, pages.length * 8));
+  if (!pagesText || pagesText.trim().length < minChars) {
+    throw new Error(builderPdfTextError(stats, pages));
   }
   const chTitle =
     st.bookChapters?.[st.selectedChapterIdx]?.title ||
