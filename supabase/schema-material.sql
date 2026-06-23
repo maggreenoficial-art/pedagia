@@ -14,11 +14,31 @@ CREATE TABLE IF NOT EXISTS public.materials (
   storage_path TEXT,
   total_pages  INTEGER     DEFAULT 0,
   indexed_at   TIMESTAMPTZ,
-  created_at   TIMESTAMPTZ DEFAULT NOW() NOT NULL
+  created_at   TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at   TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS materials_user_id_idx ON public.materials (user_id);
 CREATE INDEX IF NOT EXISTS materials_created_at_idx ON public.materials (created_at DESC);
+CREATE INDEX IF NOT EXISTS materials_updated_at_idx ON public.materials (updated_at DESC);
+
+-- Migração: bancos criados antes de updated_at (ex.: página Fluxos)
+ALTER TABLE public.materials ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL;
+UPDATE public.materials SET updated_at = COALESCE(created_at, NOW()) WHERE updated_at IS NULL;
+
+CREATE OR REPLACE FUNCTION public.pedagia_materials_set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS materials_set_updated_at ON public.materials;
+CREATE TRIGGER materials_set_updated_at
+  BEFORE UPDATE ON public.materials
+  FOR EACH ROW
+  EXECUTE FUNCTION public.pedagia_materials_set_updated_at();
 
 -- ── Capítulos por material ──────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.chapters (

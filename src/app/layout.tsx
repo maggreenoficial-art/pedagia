@@ -1,16 +1,20 @@
 import type { Metadata, Viewport } from 'next';
 import Script from 'next/script';
 import '@/styles/globals.css';
+import '@/styles/tokens.css';
+import '@/styles/professor-flux-brand.css';
+import '@/styles/a11y.css';
+import '@/styles/flow-builder.css';
 
 export const metadata: Metadata = {
-  title: 'PedagIA',
-  description: 'Gerador de provas com IA para professores',
+  title: 'Professor Flux',
+  description: 'O construtor de conhecimento com IA — provas, atividades e materiais para professores',
   manifest: '/manifest.json',
-  appleWebApp: { capable: true, title: 'PedagIA' },
+  appleWebApp: { capable: true, title: 'Professor Flux' },
 };
 
 export const viewport: Viewport = {
-  themeColor: '#080808',
+  themeColor: '#0A0A0A',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 5,
@@ -21,10 +25,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="pt-BR">
       <head>
-        <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
-        <link rel="apple-touch-icon" href="/icons/icon.svg" />
+        <link rel="icon" href="/branding/professor-flux-logo.png" type="image/png" />
+        <link rel="apple-touch-icon" href="/branding/professor-flux-logo.png" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800&family=Raleway:wght@400;500;600;700;800&display=swap"
           rel="stylesheet"
         />
       </head>

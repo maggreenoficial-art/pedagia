@@ -10,6 +10,7 @@ export interface BatchQuestionsPromptInput {
   /** Versão adaptada (PAEE / necessidades específicas) */
   adapted?: boolean;
   adaptationNotes?: string;
+  teacherStyleBlock?: string;
 }
 
 export function buildBatchQuestionsPrompt(input: BatchQuestionsPromptInput): string {
@@ -26,6 +27,7 @@ export function buildBatchQuestionsPrompt(input: BatchQuestionsPromptInput): str
   const bnccBlock = buildBnccPromptBlock(bnccPrefs, metadata.serie, metadata.disciplina);
   const adapted = !!input.adapted;
   const adaptNotes = (input.adaptationNotes || '').trim();
+  const teacherBlock = (input.teacherStyleBlock || '').trim();
   const adaptBlock = adapted
     ? `
 ════════════════════════════════════════════════
@@ -48,7 +50,7 @@ OBRIGATÓRIO:
 
 O professor selecionou páginas do PDF ou texto — use SOMENTE o material abaixo.
 Gere um BANCO de sugestões para ele APROVAR ou REJEITAR (não monte a prova final em prosa).
-${adaptBlock}
+${teacherBlock ? `\n${teacherBlock}\n` : ''}${adaptBlock}
 
 ${bnccBlock}
 

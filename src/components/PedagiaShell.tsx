@@ -2,6 +2,14 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { LEGACY_MARKUP } from '@/components/legacy/markup';
+import { MontarFlowHost } from '@/components/flow-builder/MontarFlowHost';
+import { BRAND_LOGO_FALLBACK, BRAND_LOGO_SRC } from '@/lib/brand';
+import { HomeHost } from '@/components/home/HomeHost';
+import { AuthHost } from '@/components/auth/AuthHost';
+import { ResultHost } from '@/components/result/ResultHost';
+import { LoadingHost } from '@/components/loading/LoadingHost';
+import { FluxosHost } from '@/components/fluxos/FluxosHost';
+import { LegacyNavPatch } from '@/components/nav/LegacyNavPatch';
 import { bootPedagiaLegacy, reconcilePedagiaSessionUi } from '@/lib/legacy/runtime';
 import { PedagiaCore } from '@/lib/pedagia-core';
 import type { PedagiaCoreApi } from '@/lib/pedagia-core';
@@ -79,24 +87,41 @@ export default function PedagiaShell() {
       {!ready && (
         <div
           aria-live="polite"
+          className="pf-splash"
           style={{
             position: 'fixed',
             inset: 0,
             zIndex: 99999,
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            background: '#fff',
-            fontFamily: 'Plus Jakarta Sans, sans-serif',
-            fontWeight: 700,
-            fontSize: 15,
-            color: '#111',
+            background: '#0A0A0A',
           }}
         >
-          Carregando PedagIA…
+          <img
+            src={BRAND_LOGO_SRC}
+            alt=""
+            className="pf-splash-logo"
+            width={120}
+            height={75}
+            onError={(e) => {
+              const img = e.target as HTMLImageElement;
+              if (!img.src.includes(BRAND_LOGO_FALLBACK)) img.src = BRAND_LOGO_FALLBACK;
+            }}
+          />
+          <p className="pf-splash-title">Professor Flux</p>
+          <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.5)' }}>Carregando…</p>
         </div>
       )}
       <div id="pedagia-root" ref={rootRef} />
+      {ready && <MontarFlowHost enabled={ready} />}
+      {ready && <HomeHost enabled={ready} />}
+      {ready && <AuthHost enabled={ready} />}
+      {ready && <ResultHost enabled={ready} />}
+      {ready && <LoadingHost enabled={ready} />}
+      {ready && <FluxosHost enabled={ready} />}
+      {ready && <LegacyNavPatch enabled={ready} />}
       <div id="toast" className="toast" aria-live="polite" />
       <div id="img-name-modal" className="img-modal" style={{ display: 'none' }} aria-hidden>
         <div

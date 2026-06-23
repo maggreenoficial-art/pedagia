@@ -1,0 +1,28 @@
+/* Acessibilidade — focus, motion, contraste de labels */
+:focus-visible {
+  outline: 2px solid var(--Y);
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.fl,
+.flow-field-label {
+  color: var(--t3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .card {
+    animation: none !important;
+  }
+}

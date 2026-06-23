@@ -1,37 +1,37 @@
 {
-  "name": "Gerador de Provas com IA",
-  "short_name": "PedagIA",
-  "description": "Crie provas escolares com Inteligência Artificial — para professores",
+  "name": "Professor Flux",
+  "short_name": "Prof. Flux",
+  "description": "O construtor de conhecimento com IA — provas, atividades e materiais para professores",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#080808",
-  "theme_color": "#FFD200",
+  "background_color": "#0A0A0A",
+  "theme_color": "#FFD100",
   "lang": "pt-BR",
   "categories": ["education", "productivity"],
   "icons": [
     {
-      "src": "/icons/icon.svg",
+      "src": "/branding/professor-flux-logo.png",
       "sizes": "any",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/icon.svg",
+      "src": "/branding/professor-flux-logo.png",
       "sizes": "any",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "maskable"
     }
   ],
   "screenshots": [],
   "shortcuts": [
     {
-      "name": "Nova Prova",
-      "short_name": "Nova",
-      "description": "Criar uma nova prova",
+      "name": "Montar",
+      "short_name": "Montar",
+      "description": "Criar prova ou atividade",
       "url": "/",
-      "icons": [{ "src": "/icons/icon.svg", "sizes": "any" }]
+      "icons": [{ "src": "/branding/professor-flux-logo.png", "sizes": "any" }]
     }
   ]
 }

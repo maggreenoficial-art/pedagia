@@ -1,0 +1,647 @@
+/* ══ Professor Flux — identidade visual global ═════════════════════ */
+
+:root {
+  --bg: #0a0a0a;
+  --s1: #1a1a1a;
+  --s2: #222222;
+  --s3: #2a2a2a;
+  --s4: #333333;
+  --line: rgba(255, 255, 255, 0.08);
+  --line2: rgba(255, 209, 0, 0.22);
+  --Y: #ffd100;
+  --Y2: #ffc800;
+  --Ya: rgba(255, 209, 0, 0.12);
+  --Yb: rgba(255, 209, 0, 0.06);
+  --Yc: rgba(255, 209, 0, 0.22);
+  --glow-y: 0 0 24px rgba(255, 209, 0, 0.28);
+  --f: 'Raleway', system-ui, sans-serif;
+  --f-display: 'Orbitron', 'Raleway', sans-serif;
+  --sidebar-w: 272px;
+}
+
+body {
+  background: var(--bg);
+  font-family: var(--f);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.35;
+  background-image:
+    radial-gradient(circle at 20% 10%, rgba(255, 209, 0, 0.06) 0%, transparent 42%),
+    radial-gradient(circle at 85% 80%, rgba(255, 200, 0, 0.04) 0%, transparent 38%),
+    linear-gradient(rgba(255, 209, 0, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 209, 0, 0.03) 1px, transparent 1px);
+  background-size: auto, auto, 48px 48px, 48px 48px;
+}
+
+#pedagia-root {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Tipografia de marca ── */
+.brand,
+.auth-brand,
+.pf-hero-title,
+.sl,
+.load-t,
+.result-title,
+.pf-stage-title,
+.pf-step-title {
+  font-family: var(--f-display);
+  letter-spacing: 0.04em;
+}
+
+.brand {
+  font-size: 15px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+.brand .brand-pro {
+  color: var(--t1);
+}
+.brand .brand-flux {
+  color: var(--Y);
+  text-shadow: var(--glow-y);
+}
+
+/* ── Logo imagem ── */
+.logo,
+.auth-logo,
+.pf-logo-img {
+  background: transparent !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  overflow: visible;
+}
+.logo img,
+.auth-logo img,
+.pf-logo-img img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 0 12px rgba(255, 209, 0, 0.35));
+}
+.logo {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+}
+.auth-logo {
+  width: min(220px, 78vw);
+  height: auto;
+  margin: 0 auto 18px;
+}
+.auth-logo svg {
+  display: none;
+}
+.pf-logo-img {
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+}
+
+/* ── Auth premium ── */
+.auth-wrap {
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(255, 209, 0, 0.08) 0%, transparent 55%),
+    var(--bg);
+}
+.auth-brand {
+  font-size: 22px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  margin-bottom: 6px;
+}
+.auth-tagline {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--Y);
+  text-align: center;
+  margin-bottom: 8px;
+  opacity: 0.85;
+}
+.auth-sub {
+  font-size: 14px;
+  color: var(--t2);
+  margin-bottom: 28px;
+}
+.auth-box {
+  max-width: 420px;
+  padding: 28px 22px;
+  border: 1px solid var(--line2);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(26, 26, 26, 0.96) 0%, rgba(10, 10, 10, 0.98) 100%);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 209, 0, 0.06);
+}
+.auth-btn,
+.btn-ir,
+.gbtn,
+.chip.cy,
+.np.on {
+  box-shadow: 0 4px 18px rgba(255, 209, 0, 0.18);
+}
+
+/* ── Top bar / chrome ── */
+.top {
+  background: rgba(10, 10, 10, 0.92);
+  border-bottom: 1px solid var(--line2);
+}
+.navpills {
+  background: rgba(26, 26, 26, 0.9);
+  border: 1px solid var(--line);
+}
+.np.on {
+  background: linear-gradient(135deg, rgba(255, 209, 0, 0.22), rgba(255, 200, 0, 0.1));
+  color: var(--Y);
+  border: 1px solid rgba(255, 209, 0, 0.35);
+}
+.np:hover:not(.on) {
+  color: var(--t1);
+  background: rgba(255, 255, 255, 0.04);
+}
+.user-dot {
+  box-shadow: 0 0 0 2px rgba(255, 209, 0, 0.2);
+}
+
+/* ── Cards premium ── */
+.card {
+  background: linear-gradient(180deg, rgba(26, 26, 26, 0.98) 0%, rgba(20, 20, 20, 0.98) 100%);
+  border-color: var(--line2);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+}
+.card:hover {
+  border-color: rgba(255, 209, 0, 0.18);
+}
+
+/* ── Bottom nav mobile ── */
+.bottom-nav {
+  background: rgba(10, 10, 10, 0.97);
+  border-top: 1px solid var(--line2);
+}
+.bn-item.on {
+  box-shadow: inset 0 0 0 1px rgba(255, 209, 0, 0.25);
+}
+
+/* ── ProfessorFlux Montar ── */
+.pf-hero {
+  border-bottom-color: var(--line2);
+}
+.pf-hero-title {
+  font-size: 28px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--Y);
+  text-shadow: var(--glow-y);
+}
+.pf-hero-kicker {
+  color: var(--Y);
+  letter-spacing: 0.16em;
+}
+.pf-flow-node.is-active .pf-flow-node-ring {
+  box-shadow: 0 0 0 3px rgba(255, 209, 0, 0.15), var(--glow-y);
+}
+.pf-metric {
+  border-color: var(--line2);
+  background: rgba(26, 26, 26, 0.85);
+}
+.pf-stage-shell,
+.pf-flow-nav-bar,
+.pf-journey {
+  border-color: var(--line2);
+}
+
+/* ── Splash loading ── */
+.pf-splash {
+  background: var(--bg) !important;
+  color: var(--t1) !important;
+  font-family: var(--f) !important;
+}
+.pf-splash-logo {
+  width: 120px;
+  margin-bottom: 20px;
+  filter: drop-shadow(0 0 16px rgba(255, 209, 0, 0.4));
+}
+.pf-splash-title {
+  font-family: var(--f-display);
+  font-size: 18px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--Y);
+  margin-bottom: 8px;
+}
+
+/* ── Desktop: sidebar estilo dashboard ── */
+@media (min-width: 1024px) {
+  #pedagia-root {
+    max-width: none !important;
+    margin: 0 !important;
+    width: 100%;
+    min-height: 100dvh;
+  }
+
+  #top-bar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 120;
+    width: var(--sidebar-w);
+    flex-direction: column;
+    align-items: stretch;
+    gap: 20px;
+    padding: 24px 16px;
+    border-bottom: none;
+    border-right: 1px solid var(--line2);
+    background: linear-gradient(180deg, #121212 0%, #0a0a0a 100%);
+    overflow-y: auto;
+  }
+
+#top-bar .logo {
+    width: 100%;
+    height: auto;
+    max-width: 200px;
+    margin: 0 auto 8px;
+  }
+  #top-bar .logo img {
+    width: 100%;
+    max-height: 120px;
+    object-fit: contain;
+  }
+
+  #top-bar .brand {
+    text-align: center;
+    flex: none;
+    margin-bottom: 8px;
+  }
+
+  #top-bar .navpills {
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    flex: 1;
+  }
+
+  #top-bar .np {
+    width: 100%;
+    text-align: left;
+    padding: 12px 14px;
+    font-size: 13px;
+    border-radius: 10px;
+  }
+
+  #top-bar .user-dot {
+    align-self: center;
+    width: 44px;
+    height: 44px;
+    margin-top: auto;
+  }
+
+  .wrap,
+  #main-wrap {
+    margin-left: var(--sidebar-w);
+    margin-right: 0 !important;
+    max-width: none !important;
+    width: calc(100vw - var(--sidebar-w));
+    padding: 24px 28px calc(32px + env(safe-area-inset-bottom)) 28px;
+  }
+
+  html.view-result-active .wrap {
+    padding-bottom: calc(32px + env(safe-area-inset-bottom));
+  }
+
+  body.pf-builder-active .wrap,
+  body.pf-builder-active #main-wrap {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .gbar,
+  .bottom-nav,
+  .bd-footer {
+    max-width: none;
+    width: calc(100vw - var(--sidebar-w));
+    left: var(--sidebar-w);
+    right: 0;
+    transform: none;
+    margin: 0;
+  }
+
+  body.pf-builder-active .gbar,
+  body.pf-builder-active .bd-footer {
+    width: calc(100vw - var(--sidebar-w));
+    left: var(--sidebar-w);
+    transform: none;
+  }
+
+  body.pf-builder-active #pedagia-root {
+    max-width: none;
+  }
+
+  /* Home — usa largura total */
+  .pf-home {
+    max-width: none;
+    width: 100%;
+  }
+  .pf-home-lead {
+    max-width: 720px;
+  }
+  .pf-home-hero {
+    align-items: center;
+  }
+  .pf-action-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1280px) {
+  .pf-action-grid {
+    grid-template-columns: repeat(6, 1fr);
+  }
+  .wrap,
+  #main-wrap {
+    padding-left: 36px;
+    padding-right: 36px;
+  }
+}
+
+@media (min-width: 1024px) {
+  /* Views legadas (Material, Mídias, Exercícios…) */
+  .cloud-images-grid {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  }
+  .img-page-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+  .evb-stat-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* ── Página inicial do professor ── */
+.pf-home {
+  padding-bottom: 24px;
+  animation: up 0.35s ease both;
+}
+.pf-home-hero {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  padding: 8px 4px 20px;
+  border-bottom: 1px solid var(--line2);
+}
+.pf-home-logo {
+  width: 88px;
+  height: auto;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 16px rgba(255, 209, 0, 0.35));
+}
+.pf-home-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--Y);
+  margin-bottom: 4px;
+}
+.pf-home-title {
+  font-family: var(--f-display);
+  font-size: clamp(26px, 4vw, 34px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0 0 8px;
+  color: var(--t1);
+}
+.pf-home-lead {
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--t2);
+  max-width: 560px;
+  margin: 0;
+}
+.pf-home-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+@media (min-width: 900px) {
+  .pf-home-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.pf-home-muted {
+  font-size: 14px;
+  color: var(--t3);
+  line-height: 1.5;
+}
+.pf-sample-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+.pf-sample-list li {
+  padding: 10px 12px;
+  border-radius: var(--rsm);
+  border: 1px solid var(--line);
+  background: var(--s2);
+  font-size: 12px;
+  color: var(--t2);
+  line-height: 1.45;
+}
+.pf-sample-list strong {
+  display: block;
+  color: var(--Y);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.pf-style-card {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--rsm);
+  border: 1px solid rgba(255, 209, 0, 0.25);
+  background: var(--Ya);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--t1);
+}
+.pf-style-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--Y);
+  margin-bottom: 6px;
+}
+.pf-home-actions {
+  margin-bottom: 20px;
+}
+.pf-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+@media (min-width: 640px) {
+  .pf-action-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.pf-action-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px;
+  border-radius: var(--r);
+  border: 1px solid var(--line2);
+  background: var(--s1);
+  color: var(--t1);
+  cursor: pointer;
+  font-family: var(--f);
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.pf-action-card:hover {
+  border-color: rgba(255, 209, 0, 0.35);
+  box-shadow: var(--glow-y);
+}
+.pf-action-icon {
+  font-size: 22px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  color: var(--Y);
+}
+.pf-action-card strong {
+  font-size: 14px;
+  font-weight: 800;
+}
+.pf-action-card span:last-child {
+  font-size: 12px;
+  color: var(--t3);
+  line-height: 1.35;
+}
+.pf-home-draft {
+  margin-bottom: 16px;
+  border-color: rgba(255, 209, 0, 0.3);
+}
+.pf-home-draft-title {
+  font-weight: 800;
+  color: var(--Y);
+  margin-bottom: 4px;
+}
+.pf-home-draft-desc {
+  font-size: 13px;
+  color: var(--t2);
+  margin-bottom: 12px;
+}
+.pf-home-toast {
+  position: sticky;
+  bottom: var(--toast-bottom, 80px);
+  padding: 12px 14px;
+  border-radius: var(--rsm);
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--Y);
+  text-align: center;
+}
+.hidden {
+  display: none !important;
+}
+
+.app-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: var(--rsm);
+  border: 1px solid var(--line2);
+  background: var(--s2);
+  color: var(--t1);
+  font-family: var(--f);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.app-back-btn:hover {
+  border-color: var(--Y);
+  color: var(--Y);
+}
+.app-back-btn-label {
+  line-height: 1;
+}
+.pf-fluxos-top {
+  margin-bottom: 12px;
+}
+
+.pf-fluxos-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pf-fluxos-card-inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.pf-fluxos-title {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 900;
+  color: var(--t1);
+}
+.pf-fluxos-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.pf-fluxos-tag {
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  color: var(--t2);
+}
+.pf-fluxos-tag--ok {
+  border-color: rgba(255, 209, 0, 0.35);
+  color: var(--Y);
+}
+.pf-fluxos-resume {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.pf-fluxos-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  padding: 24px 12px;
+}

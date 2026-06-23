@@ -54,12 +54,23 @@ const st = {
   builderPool: [], // { id, source, inProva, reviewStatus, variant, type, statement, ... }
   builderSelectedMedia: new Set(),
   builderSelectedExercises: new Set(),
+  /** Figuras marcadas no passo ④ — exercícios gerados só no passo Montar */
+  builderFigureSelection: new Set(),
   builderPagesConfirmed: false,
   builderConfirmedPageList: [],
   builderPoolTab: 'turma', // turma | adaptada | all
   builderWantAdapted: false,
   /** Montar ④ — rascunhos de exercício por mídia: { [imageId]: { question, reviewStatus, type, loading? } } */
   builderMediaDrafts: {},
+  teacherProfile: null,
+  hasDraftProva: false,
+  draftPreview: '',
+  builderFlowStep: 1,
+  /** Tipo de produção pedagógica (Flow Builder) */
+  productionKind: 'prova',
+  /** Nome editável do fluxo (independente do PDF) */
+  flowTitle: '',
+  flowSavedAt: null,
 };
 
 const DRAFT_KEY = 'pgdraft';
@@ -67,7 +78,7 @@ const VIEW_KEY = 'pgview';
 
 function saveActiveView() {
   try {
-    if (st.activeView && st.activeView !== 'auth' && st.activeView !== 'loading' && st.activeView !== 'revisao' && st.activeView !== 'builder') {
+    if (st.activeView && st.activeView !== 'auth' && st.activeView !== 'loading' && st.activeView !== 'revisao' && st.activeView !== 'builder' && st.activeView !== 'result') {
       sessionStorage.setItem(VIEW_KEY, st.activeView);
     }
   } catch {}
@@ -76,7 +87,7 @@ function saveActiveView() {
 function restoreActiveView() {
   try {
     const v = sessionStorage.getItem(VIEW_KEY);
-    if (v && v !== 'auth' && v !== 'loading') return v;
+    if (v && v !== 'auth' && v !== 'loading' && v !== 'result') return v;
   } catch {}
   return null;
 }
@@ -103,6 +114,16 @@ function authStorageAdapter() {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function emitOperationProgress(detail) {
+  try {
+    window.dispatchEvent(new CustomEvent('pedagia:operation-progress', { detail }));
+  } catch {}
+}
+
+function clearOperationProgress() {
+  emitOperationProgress({ active: false });
 }
 
 function persistSessionBackup(session) {
@@ -1020,6 +1041,8 @@ function restoreDraft() {
     st.provaText = d.provaText;
     st.gabText = d.gabText || '';
     st.currentProvaId = d.currentProvaId || null;
+    st.hasDraftProva = true;
+    st.draftPreview = d.provaText.slice(0, 280);
     const pt = document.getElementById('prova-text');
     const gt = document.getElementById('gab-text');
     if (pt) pt.value = st.provaText;
@@ -1030,12 +1053,16 @@ function restoreDraft() {
       const badge = document.getElementById('badge-saved');
       if (badge) badge.style.display = '';
     }
-    showView('result');
-    syncNavPills('result');
-    rTab('preview');
-    scheduleExamPreview();
     return true;
   } catch { return false; }
+}
+
+function resumeDraftProva() {
+  if (!st.provaText?.trim()) return;
+  showView('result');
+  syncNavPills('home');
+  rTab('preview');
+  scheduleExamPreview();
 }
 
 function clearDraft() {
@@ -1066,15 +1093,64 @@ function onLogin(session, opts = {}) {
   });
   initMaterialsAfterLogin({ silent: opts.skipTplToast });
   loadBnccPrefs();
-  if (!restoreDraft()) {
-    const savedView = restoreActiveView();
-    const defaultView = savedView && savedView !== 'form' ? savedView : 'builder';
-    showView(defaultView);
-    if (defaultView === 'builder') initBuilderView().catch(() => {});
-    if (savedView === 'material' || defaultView === 'material') initMaterialView().catch(() => {});
-    if (savedView === 'midias') refreshMidiasPage();
-  }
+  void loadTeacherProfile();
+  restoreDraft();
+  const savedView = restoreActiveView();
+  const defaultView =
+    savedView && savedView !== 'form' && savedView !== 'result' ? savedView : 'home';
+  showView(defaultView);
+  if (defaultView === 'builder') initBuilderView().catch(() => {});
+  if (savedView === 'material' || defaultView === 'material') initMaterialView().catch(() => {});
+  if (savedView === 'midias' || defaultView === 'midias') refreshMidiasPage();
   renderExamVisualBuilder();
+}
+
+async function loadTeacherProfile() {
+  const token = currentSession?.access_token;
+  if (!token) return;
+  try {
+    const res = await fetch('/api/professor-profile', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    st.teacherProfile = data.profile || null;
+  } catch (e) {
+    console.warn('teacher profile', e);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pedagia:profile-updated', () => {
+    void loadTeacherProfile();
+  });
+}
+
+function getTeacherStyleBlock() {
+  const p = st.teacherProfile;
+  if (!p) return '';
+  const parts = [];
+  if (p.displayName?.trim()) parts.push(`Nome: ${p.displayName.trim()}`);
+  if (p.subjects?.trim()) parts.push(`Disciplinas: ${p.subjects.trim()}`);
+  if (p.bio?.trim()) parts.push(`Apresentação: ${p.bio.trim()}`);
+  const wp = p.writingProfile;
+  if (wp?.promptBlock?.trim()) parts.push(wp.promptBlock.trim());
+  else if (wp?.summary?.trim()) {
+    parts.push(`Estilo: ${wp.summary.trim()}`);
+    if (wp.tone) parts.push(`Tom: ${wp.tone}`);
+  }
+  const samples = (p.sampleExams || []).filter((s) => String(s.textPreview || '').trim().length >= 80);
+  if (samples.length) {
+    parts.push(
+      '\nPROVAS REAIS DESTE PROFESSOR (referência obrigatória de tom, estrutura de enunciados e vocabulário — imite o estilo):',
+    );
+    samples.slice(0, 4).forEach((s, i) => {
+      const excerpt = String(s.textPreview).trim().slice(0, 4500);
+      parts.push(`--- Amostra ${i + 1}: ${s.fileName || 'prova'} ---\n${excerpt}`);
+    });
+  }
+  if (!parts.length) return '';
+  return `\nPERFIL PEDAGÓGICO DO PROFESSOR (imite este tom em todas as questões):\n${parts.join('\n')}\n`;
 }
 function onLogout() {
   currentSession = null;
@@ -1149,34 +1225,52 @@ async function doLogout() {
 function showView(name) {
   st.activeView = name;
   saveActiveView();
-  ['auth','builder','form','material','midias','exercicios','revisao','loading','result','history','inteligente'].forEach(v => {
+  ['auth','home','builder','form','material','midias','exercicios','revisao','loading','result','history','inteligente','fluxos'].forEach(v => {
     const el = document.getElementById('view-' + v);
     if (el) el.style.display = v === name ? '' : 'none';
   });
   const gbar = document.getElementById('gbar');
   const hideChrome = name === 'auth' || name === 'loading';
   if (gbar) gbar.style.display = !hideChrome && name === 'form' && currentSession ? '' : 'none';
-  if (name === 'builder') document.getElementById('bd-montar-btn')?.scrollIntoView({ block: 'nearest' });
+  if (name === 'builder') document.getElementById('pf-flow-stage')?.scrollTo?.({ top: 0 });
   const bottomNav = document.getElementById('bottom-nav');
-  if (bottomNav) bottomNav.style.display = !hideChrome && currentSession ? 'flex' : 'none';
+  if (bottomNav) bottomNav.style.display = !hideChrome && currentSession && name !== 'builder' ? 'flex' : 'none';
+  const topBar = document.getElementById('top-bar');
+  if (topBar && currentSession && !hideChrome) {
+    topBar.style.display = name === 'builder' ? 'none' : 'flex';
+  }
   if (name === 'result') saveDraft();
-  syncNavPills(name === 'result' ? 'form' : name);
+  syncNavPills(name === 'result' ? 'home' : name);
   document.documentElement.classList.toggle('view-result-active', name === 'result');
+  document.body.classList.toggle('pf-builder-active', name === 'builder');
+  try {
+    window.dispatchEvent(new CustomEvent('pedagia:viewchange', { detail: { view: name } }));
+  } catch {}
+  if (name === 'builder') {
+    requestAnimationFrame(() => {
+      builderFlowInit();
+    });
+  }
 }
 function syncNavPills(view) {
-  const map = { builder:'np-builder', form:'np-form', material:'np-material', midias:'np-midias', exercicios:'np-exercicios', inteligente:'np-ci', history:'np-hist' };
+  const map = { home:'np-home', builder:'np-builder', form:'np-form', material:'np-material', midias:'np-midias', exercicios:'np-exercicios', inteligente:'np-ci', history:'np-hist', fluxos:'np-fluxos' };
+  const navView = view === 'result' ? 'home' : view;
   Object.entries(map).forEach(([v, id]) => {
     const el = document.getElementById(id);
-    if (el) el.classList.toggle('on', v === view);
+    if (el) el.classList.toggle('on', v === navView);
   });
   document.querySelectorAll('.bn-item').forEach((btn) => {
-    btn.classList.toggle('on', btn.dataset.view === view);
+    btn.classList.toggle('on', btn.dataset.view === navView);
   });
 }
 function goTo(view) {
   if (!currentSession) { showView('auth'); return; }
-  // Fluxo antigo "Nova prova" unificado no Montar.
   if (view === 'form') view = 'builder';
+  if (view === 'home') {
+    showView('home');
+    syncNavPills('home');
+    return;
+  }
   if (view === 'builder') {
     showView('builder');
     syncNavPills('builder');
@@ -1199,6 +1293,11 @@ function goTo(view) {
     showView('exercicios');
     syncNavPills('exercicios');
     loadExercicios();
+    return;
+  }
+  if (view === 'fluxos') {
+    showView('fluxos');
+    syncNavPills('fluxos');
     return;
   }
   if (view === 'form' && st.provaText?.trim()) {
@@ -2026,7 +2125,11 @@ function collectMontarState() {
         ]),
     ),
     selectedMedia: [...(st.builderSelectedMedia || [])],
+    selectedFigures: [...(st.builderFigureSelection || [])],
     selectedExercises: [...(st.builderSelectedExercises || [])],
+    flowStep: st.builderFlowStep || 1,
+    flowTitle: st.flowTitle || '',
+    flowSavedAt: st.flowSavedAt || null,
   };
 }
 
@@ -2040,6 +2143,7 @@ function applyMontarState(m) {
   st.builderPool = Array.isArray(m.pool) ? m.pool : [];
   st.builderMediaDrafts = m.mediaDrafts && typeof m.mediaDrafts === 'object' ? m.mediaDrafts : {};
   st.builderSelectedMedia = new Set(m.selectedMedia || []);
+  st.builderFigureSelection = new Set(m.selectedFigures || []);
   st.builderSelectedExercises = new Set(m.selectedExercises || []);
   if (m.numQ) st.numQ = m.numQ;
   if (m.pagesConfirmed && m.confirmedPageList?.length && !(st.selectedPages?.size)) {
@@ -2064,6 +2168,9 @@ function applyMontarState(m) {
   if (cb) cb.checked = st.builderWantAdapted;
   const bdN = document.getElementById('bd-numq');
   if (bdN) bdN.textContent = String(st.numQ || 10);
+  if (m.flowStep) st.builderFlowStep = Math.max(1, Math.min(6, parseInt(String(m.flowStep), 10) || 1));
+  if (m.flowTitle) st.flowTitle = String(m.flowTitle);
+  if (m.flowSavedAt) st.flowSavedAt = m.flowSavedAt;
   return true;
 }
 
@@ -2076,6 +2183,8 @@ function collectBuilderSnapshot() {
 
   return {
     montar: collectMontarState(),
+    flowTitle: st.flowTitle || '',
+    flowSavedAt: st.flowSavedAt || null,
     bookFileName: st.bookFileName,
     bookTotalPages: st.bookTotalPages,
     sumarioPage: parseInt(document.getElementById('pg')?.value, 10) || null,
@@ -2153,25 +2262,152 @@ async function saveBookToStorage(file) {
   }
 }
 
-async function saveBuilderToStorage() {
-  if (!st.bookFileName && !st.builderPool?.length && !st.builderPagesConfirmed) return;
+async function saveFlowRegistry() {
+  if (!cloudReady()) return { ok: false, reason: 'no_cloud' };
+  builderSyncFields();
+  const key = st.materialId || 'current';
+  const entry = {
+    id: key,
+    materialId: st.materialId || null,
+    flowTitle: st.flowTitle || '',
+    flowSavedAt: st.flowSavedAt || Date.now(),
+    bookFileName: st.bookFileName || '',
+    totalPages: st.bookTotalPages || 0,
+    disciplina: v('bd-disc') || v('f-disc') || '',
+    serie: v('bd-serie') || v('f-serie') || '',
+    tipo: v('bd-tipo') || v('f-tipo') || 'Prova',
+    poolCount: (st.builderPool || []).length,
+    pagesConfirmed: !!st.builderPagesConfirmed,
+    savedAt: st.flowSavedAt || Date.now(),
+  };
+  const ws = await PedagiaCloud.getWorkspace().catch(() => null);
+  const root = ws?.builder_state && typeof ws.builder_state === 'object' ? { ...ws.builder_state } : {};
+  root.__flows = { ...(root.__flows || {}), [key]: entry };
+  await PedagiaCloud.upsertWorkspace({
+    builder_state: root,
+    book_file_name: st.bookFileName || ws?.book_file_name || null,
+    book_total_pages: st.bookTotalPages || ws?.book_total_pages || null,
+  });
+  return { ok: true, entry };
+}
+
+async function saveBuilderManual() {
+  if (!currentSession) {
+    toast('Faça login para salvar o fluxo na nuvem.', 'err', 5000);
+    return { ok: false, error: 'Faça login para salvar.' };
+  }
+  builderSyncFields();
+  st.flowSavedAt = Date.now();
+  let storage = { ok: false, cloud: false, local: false };
+  try {
+    storage = await saveBuilderToStorage({ force: true });
+  } catch (e) {
+    console.warn('saveBuilderToStorage (manual):', e);
+  }
+  let registry = { ok: false };
+  try {
+    registry = await saveFlowRegistry();
+  } catch (e) {
+    console.warn('saveFlowRegistry:', e);
+    if (!storage.ok) {
+      toast('Erro ao salvar fluxo: ' + (e.message || e), 'err', 6000);
+      return { ok: false, error: e.message || 'Erro ao salvar' };
+    }
+  }
+  const ok = registry.ok || storage.cloud || storage.local;
+  if (!ok) {
+    toast('Não foi possível salvar. Confirme o login e tente de novo.', 'err', 6000);
+    return { ok: false, error: 'Falha ao persistir' };
+  }
+  try {
+    window.dispatchEvent(new CustomEvent('pedagia:flow-saved', { detail: { savedAt: st.flowSavedAt } }));
+  } catch {}
+  const where = registry.ok ? 'nuvem' : storage.local ? 'neste aparelho' : 'nuvem';
+  toast(`Fluxo salvo (${where}). Abra Fluxos para continuar depois.`, 'ok', 4500);
+  return { ok: true, savedAt: st.flowSavedAt, cloud: registry.ok || storage.cloud };
+}
+
+function setFlowTitle(title) {
+  st.flowTitle = String(title || '').trim();
+  scheduleSaveBuilder();
+}
+
+async function resumeBuilderFlow(materialId) {
+  if (!currentSession) {
+    showView('auth');
+    return { ok: false };
+  }
+  showView('builder');
+  syncNavPills('builder');
+  const id = materialId && materialId !== 'current' ? materialId : null;
+  if (id) {
+    await switchMaterial(id);
+  }
+  await loadSavedBuilder({ silent: true });
+  builderFlowInit();
+  builderRenderMaterialSelect();
+  builderUpdateQuestoesUI();
+  try {
+    window.dispatchEvent(new CustomEvent('pedagia:flow-resumed'));
+  } catch {}
+  toast('Fluxo restaurado.', 'ok', 3500);
+  return { ok: true, materialId: st.materialId, flowTitle: st.flowTitle };
+}
+
+async function saveBuilderToStorage(opts = {}) {
+  const force = !!opts.force;
+  const hasContent = !!(
+    st.bookFileName ||
+    st.materialId ||
+    st.builderPool?.length ||
+    st.builderPagesConfirmed ||
+    (st.flowTitle && st.flowTitle.trim()) ||
+    v('f-disc') ||
+    v('bd-disc') ||
+    v('f-serie') ||
+    v('bd-serie')
+  );
+  if (!force && !hasContent) return { ok: false, skipped: true, cloud: false, local: false };
+
   const snap = collectBuilderSnapshot();
+  let local = false;
   if (window.indexedDB) {
     await dbPut(BUILDER_STORE, builderStorageKey(), snap);
+    local = true;
   }
+  let cloud = false;
   if (cloudReady()) {
     try {
       await PedagiaCloud.saveBuilderState(snap, st.materialId);
+      cloud = true;
     } catch (e) {
       if (e?.code === 'BUILDER_STATE_TOO_LARGE' || isCloudStorageSizeError(e)) {
-        console.warn('Builder na nuvem (metadados):', e.message);
-        return;
+        console.warn('Builder na nuvem (snapshot completo):', e.message);
+        try {
+          const slim = {
+            montar: collectMontarState(),
+            flowTitle: st.flowTitle || '',
+            flowSavedAt: st.flowSavedAt || Date.now(),
+            bookFileName: st.bookFileName,
+            bookTotalPages: st.bookTotalPages,
+            selectedPages: [...(st.selectedPages || [])],
+            savedAt: Date.now(),
+            imageCatalog: [],
+            imageQuestionBlocks: [],
+          };
+          await PedagiaCloud.saveBuilderState(slim, st.materialId);
+          cloud = true;
+        } catch (e2) {
+          console.warn('Builder slim na nuvem:', e2);
+        }
+      } else {
+        throw e;
       }
-      throw e;
     }
   }
   const hint = document.getElementById('livro-builder-hint');
   if (hint) hint.style.display = 'block';
+  return { ok: cloud || local, cloud, local };
 }
 
 function showBookLoadedUI(fromStorage = false) {
@@ -2344,6 +2580,8 @@ async function applyBuilderSnapshot(snap) {
   }
 
   if (snap.montar) applyMontarState(snap.montar);
+  if (snap.flowTitle) st.flowTitle = String(snap.flowTitle);
+  if (snap.flowSavedAt) st.flowSavedAt = snap.flowSavedAt;
   if (snap.examPlanOrder) st.examPlanOrder = snap.examPlanOrder;
   if (snap.bnccPrefs) {
     const o = snap.bnccPrefs;
@@ -3688,8 +3926,22 @@ async function consumeGerarImagemStream(resp) {
         if (/Enviando POST/i.test(ev.message)) setMidiaGenProgress(25);
         if (/respondeu HTTP/i.test(ev.message)) setMidiaGenProgress(55);
         if (/Modelo cobrado/i.test(ev.message)) setMidiaGenProgress(75);
+        emitOperationProgress({
+          operation: 'image',
+          phase: 'log',
+          message: ev.message.replace(/^[^\w]+/, '').slice(0, 120),
+          percent: /Enviando POST/i.test(ev.message) ? 25 : /respondeu HTTP/i.test(ev.message) ? 55 : /Modelo cobrado/i.test(ev.message) ? 75 : undefined,
+        });
       }
-      if (ev.type === 'progress' && ev.percent != null) setMidiaGenProgress(ev.percent);
+      if (ev.type === 'progress' && ev.percent != null) {
+        setMidiaGenProgress(ev.percent);
+        emitOperationProgress({
+          operation: 'image',
+          phase: 'progress',
+          message: 'Renderizando imagem…',
+          percent: ev.percent,
+        });
+      }
       if (ev.type === 'error') throw new Error(ev.error || 'Erro ao gerar imagem');
       if (ev.type === 'done') donePayload = ev;
     }
@@ -3891,6 +4143,180 @@ async function saveGeneratedMidiaToCloud() {
   } finally {
     if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '💾 Salvar na nuvem'; }
   }
+}
+
+/** Gera imagem com IA no Flow Builder e salva na nuvem (sem depender do DOM midia-gen-*). */
+async function builderFlowGenerateAndSaveImage(opts = {}) {
+  if (!(await ensureFreshSession())) throw new Error('Faça login para gerar imagens.');
+  if (!cloudReady()) throw new Error('Faça login para salvar na nuvem.');
+  const prompt = String(opts.prompt || '').trim();
+  if (prompt.length < 8) throw new Error('Descreva a imagem (mínimo 8 caracteres).');
+  const title = String(opts.title || prompt.slice(0, 60)).trim();
+  const category = opts.category || 'educativo';
+  const aspectRatio = opts.aspectRatio || '4:3';
+
+  emitOperationProgress({
+    active: true,
+    operation: 'image',
+    phase: 'start',
+    message: 'Enviando pedido para a IA…',
+    percent: 8,
+    startedAt: Date.now(),
+  });
+
+  try {
+  const resp = await fetch('/api/gerar-imagem', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${currentSession.access_token}`,
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({
+      stream: true,
+      category,
+      prompt,
+      aspectRatio,
+      title,
+      disciplina: v('bd-disc') || v('f-disc'),
+      serie: v('bd-serie') || v('f-serie'),
+    }),
+  });
+
+  if (!resp.ok) {
+    const errJson = await resp.json().catch(() => ({}));
+    throw new Error(errJson.error || `Erro HTTP ${resp.status}`);
+  }
+
+  const contentType = resp.headers.get('content-type') || '';
+  let data;
+  if (contentType.includes('text/event-stream')) {
+    data = await consumeGerarImagemStream(resp);
+  } else {
+    data = await resp.json();
+  }
+
+  const img = data.images?.[0];
+  if (!img?.base64 && !img?.dataUrl) throw new Error('Nenhuma imagem retornada.');
+
+  const pending = {
+    ...img,
+    category: data.category,
+    title: data.title || title,
+    sourceText: 'Fonte: ilustração gerada por IA (PedagIA / Kie AI).',
+  };
+
+  const mime = pending.mime || 'image/png';
+  if (!cleanB64(pending.base64 || '') && pending.dataUrl) {
+    const fetched = await fetchUrlToB64(pending.dataUrl);
+    if (fetched) pending.base64 = fetched;
+  }
+  const raw = cleanB64(pending.base64 || '');
+  if (!raw) throw new Error('Imagem sem dados para enviar.');
+
+  const bin = atob(raw);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+  const safeTitle = title.slice(0, 40).replace(/[^\w\-]+/g, '_');
+  const file = new File([arr], `${safeTitle}.${ext}`, { type: mime });
+
+  emitOperationProgress({
+    operation: 'image',
+    phase: 'upload',
+    message: 'Salvando imagem na nuvem…',
+    percent: 92,
+  });
+
+  const uploaded = await PedagiaCloud.uploadMediaImage(file);
+  const entry = {
+    ...uploaded,
+    title: title.slice(0, 80),
+    sourceText: pending.sourceText,
+    caption: title.slice(0, 80),
+    previewUrl: img.dataUrl || uploaded.previewUrl || uploaded.publicUrl,
+    savedToBuilder: true,
+    recommendedForQuestion: true,
+    type: 'figura',
+    usefulnessScore: 1,
+    manualCrop: false,
+    aiGenerated: true,
+  };
+
+  const existing = getImageCatalogEntry(entry.imageId);
+  if (!existing) {
+    st.imageCatalog.push(entry);
+    st.extractedImages.push(entry);
+  } else {
+    Object.assign(existing, entry);
+  }
+  entry.segmented = !!(entry.sourceText || '').trim();
+  if (typeof PedagiaCloud.upsertImageMeta === 'function') {
+    try { await PedagiaCloud.upsertImageMeta(entry); } catch (e) { console.warn('upsertImageMeta', e); }
+  }
+
+  st.builderFigureSelection = st.builderFigureSelection || new Set();
+  st.builderFigureSelection.add(entry.imageId);
+  scheduleSaveBuilder();
+  toast('Imagem gerada e selecionada para a produção.', 'ok', 4500);
+  clearOperationProgress();
+  return {
+    imageId: entry.imageId,
+    previewUrl: entry.previewUrl || img.dataUrl || '',
+    title: entry.title,
+  };
+  } catch (e) {
+    clearOperationProgress();
+    throw e;
+  }
+}
+
+/** Upload de PDF dentro do Flow Builder (sem ir à aba Material). */
+async function builderFlowUploadPdf(file) {
+  if (!file) throw new Error('Nenhum arquivo selecionado.');
+  const input = document.createElement('input');
+  input.type = 'file';
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  input.files = dt.files;
+  await handleBookFile(input);
+  if (st.materialId) {
+    await builderOnMaterialChange(st.materialId);
+  }
+  renderMaterialLibrary();
+  builderRenderMaterialSelect();
+  builderRenderPageChips();
+  return {
+    materialId: st.materialId || null,
+    fileName: st.bookFileName || file.name,
+    totalPages: st.bookTotalPages || 0,
+  };
+}
+
+async function builderFlowRefreshMaterials() {
+  await fetchMaterialsList();
+  renderMaterialLibrary();
+  builderRenderMaterialSelect();
+}
+
+async function builderFlowSaveManualHeader(opts = {}) {
+  const name = String(opts.name || '').trim();
+  const escola = String(opts.escola || '').trim();
+  const prof = String(opts.prof || '').trim();
+  if (!name && !escola) {
+    throw new Error('Informe um nome ou o nome da escola.');
+  }
+  const setVal = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.value = val;
+  };
+  setVal('f-escola', escola);
+  setVal('f-prof', prof);
+  setVal('hdr-save-name', name || escola);
+  await saveHeaderToLibrary();
+  builderRenderHeaderSelect();
+  renderHeadersList();
+  return { activeHeaderId: st.activeHeaderId || null };
 }
 
 async function handleMidiasUpload(input) {
@@ -4119,7 +4545,65 @@ function normalizePdfPageList(pages, maxPages) {
   return nums;
 }
 
-async function extractTextFromPdfPages(pdf, pageNumbers) {
+async function renderPdfPageToJpegB64(pdf, pageNum, scale = 1.35) {
+  const page = await pdf.getPage(pageNum);
+  const vp = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(vp.width);
+  canvas.height = Math.round(vp.height);
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+  return canvas.toDataURL('image/jpeg', 0.72).split(',')[1];
+}
+
+async function extractTextFromPdfPagesVision(pdf, pages, onProgress) {
+  const token = currentSession?.access_token;
+  if (!token) throw new Error('Faça login para usar a IA.');
+  builderSyncFields();
+  const batchSize = 2;
+  const parts = [];
+  for (let i = 0; i < pages.length; i += batchSize) {
+    const chunk = pages.slice(i, i + batchSize);
+    if (onProgress) onProgress(Math.min(i + chunk.length, pages.length), pages.length);
+    const rendered = await Promise.all(chunk.map((p) => renderPdfPageToJpegB64(pdf, p)));
+    const payload = chunk.map((p, idx) => ({ pageNumber: p, imageBase64: rendered[idx] }));
+    const resp = await fetch('/api/extrair-texto-paginas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({
+        pages: payload,
+        disc: v('bd-disc') || v('f-disc'),
+        serie: v('bd-serie') || v('f-serie'),
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || 'Erro ao ler páginas com IA (visão).');
+    for (const pg of data.pages || []) {
+      parts.push({ pageNumber: pg.pageNumber, text: String(pg.text || '').trim() });
+    }
+  }
+  parts.sort((a, b) => a.pageNumber - b.pageNumber);
+  let rawText = '';
+  let withText = 0;
+  for (const p of parts) {
+    if (p.text.length > 15) withText += 1;
+    rawText += `[Página ${p.pageNumber}]\n${p.text}\n\n`;
+  }
+  const core = getCore();
+  const text = core?.cleanFullChapterText ? core.cleanFullChapterText(rawText) : rawText;
+  return {
+    text,
+    rawText,
+    stats: {
+      visionUsed: true,
+      withText,
+      chars: text.trim().length,
+      rawChars: rawText.trim().length,
+      normalized: pages.length,
+    },
+  };
+}
+
+async function extractTextFromPdfPages(pdf, pageNumbers, opts = {}) {
   const stats = {
     requested: (pageNumbers || []).length,
     maxPages: pdf?.numPages || 0,
@@ -4128,6 +4612,7 @@ async function extractTextFromPdfPages(pdf, pageNumbers) {
     chars: 0,
     rawChars: 0,
     outOfRange: [],
+    visionUsed: false,
   };
   if (!pdf || !pageNumbers?.length) return { text: '', rawText: '', stats };
 
@@ -4164,8 +4649,31 @@ async function extractTextFromPdfPages(pdf, pageNumbers) {
   stats.rawChars = rawText.trim().length;
 
   const core = getCore();
-  const text = core?.cleanFullChapterText ? core.cleanFullChapterText(rawText) : rawText;
+  let text = core?.cleanFullChapterText ? core.cleanFullChapterText(rawText) : rawText;
   stats.chars = text.trim().length;
+
+  const minChars = Math.min(80, Math.max(40, pages.length * 8));
+  const needsVision =
+    opts.allowVision !== false &&
+    pages.length > 0 &&
+    (stats.withText === 0 || stats.chars < minChars);
+
+  if (needsVision) {
+    try {
+      const vision = await extractTextFromPdfPagesVision(pdf, pages, opts.onVisionProgress);
+      if (vision.text.trim().length >= Math.min(40, minChars) || vision.stats.withText > 0) {
+        return {
+          text: vision.text,
+          rawText: vision.rawText,
+          stats: { ...stats, ...vision.stats, visionUsed: true },
+        };
+      }
+    } catch (e) {
+      console.warn('extractTextFromPdfPagesVision', e);
+      if (opts.visionRequired) throw e;
+    }
+  }
+
   return { text, rawText, stats };
 }
 
@@ -4181,10 +4689,15 @@ function builderPdfTextError(stats, pages) {
   if (stats.normalized === 0) {
     return `Nenhuma página válida no PDF (${max} pág.). Confirme o intervalo novamente no passo ②.`;
   }
-  if (stats.withText === 0) {
+  if (stats.withText === 0 && !stats.visionUsed) {
     return (
-      `As ${stats.normalized} página(s) confirmadas não têm texto selecionável no PDF — costuma ser livro digitalizado (só imagem). ` +
-      'Use "Ou conteúdo escrito" no passo ②, escolha outras páginas ou envie um PDF com texto copiável.'
+      `Não foi possível ler texto das ${stats.normalized} página(s) — PDF digitalizado ou imagens ilegíveis. ` +
+      'Tente outras páginas, melhore a qualidade do scan ou cole um resumo em "Ou conteúdo escrito" no passo ②.'
+    );
+  }
+  if (stats.visionUsed && stats.chars < Math.min(80, Math.max(40, (pages?.length || 1) * 8))) {
+    return (
+      'A IA leu as páginas mas extraiu pouco texto legível. Escolha páginas mais nítidas ou use "Ou conteúdo escrito".'
     );
   }
   return (
@@ -5032,6 +5545,12 @@ function blockToExamQuestion(block, number) {
 }
 
 let _examPreviewTimer = null;
+let _gerarQuestoesLock = false;
+let _flowInlineResult = false;
+
+export function builderSetInlineResult(enabled) {
+  _flowInlineResult = !!enabled;
+}
 
 function syncProvaStateFromUI() {
   const pt = document.getElementById('prova-text');
@@ -5060,7 +5579,7 @@ function updatePreviewStatus(issues, questionCount) {
   const msg = issues.length
     ? `⚠ ${issues.length} aviso(s)`
     : `${questionCount} questão(ões)`;
-  for (const id of ['preview-status', 'form-preview-status']) {
+  for (const id of ['preview-status', 'form-preview-status', 'flow-inline-preview-status']) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.textContent = msg;
@@ -5089,7 +5608,7 @@ async function refreshExamPreview() {
   } else if (questions.length) {
     html = await buildExamPreviewHtml(questions);
   }
-  for (const id of ['exam-preview-iframe', 'form-preview-iframe']) {
+  for (const id of ['exam-preview-iframe', 'form-preview-iframe', 'flow-inline-preview-iframe']) {
     const iframe = document.getElementById(id);
     if (iframe) iframe.srcdoc = html;
   }
@@ -5193,6 +5712,7 @@ function appendCropCardToGallery(entry, galleryIds) {
   updateCropGalleryCount();
   updateBlockSelInfo();
   builderRenderBdCropGallery();
+  builderRenderMidias();
   scheduleSaveBuilder();
 }
 
@@ -5350,7 +5870,7 @@ function confirmCropSelection() {
   }, _cropPageNum, pageSrcs[0] || '');
   appendCropCardToGallery(entry);
   closeCropBuilder();
-  toast('Figura adicionada ao builder. Use «Sugerir questão».', 'ok', 4000);
+  toast('Figura recortada. Gere exercícios no passo ④ ou «Gerar todas as figuras».', 'ok', 4500);
 }
 
 // ── Galeria: páginas para recorte manual + figuras já recortadas ─────
@@ -5539,10 +6059,13 @@ async function fetchAndBuildImageQuestion(imageId) {
   }
   let image = getCloudImageEntry(imageId);
   if (!image) {
+    image = getImageCatalogEntry(imageId);
+  }
+  if (!image) {
     const cloud = (st.cloudImageIndex || []).find((i) => i.imageId === imageId);
     if (cloud) image = cloud;
   }
-  if (!image) throw new Error('Imagem não encontrada. Atualize em Minhas mídias.');
+  if (!image) throw new Error('Figura não encontrada. Recorte de novo no passo ② ou atualize em Minhas mídias.');
   if (!getImageCatalogEntry(imageId)) {
     await useCloudImageInBuilder(imageId, { silent: true });
     image = getCloudImageEntry(imageId) || image;
@@ -5843,7 +6366,7 @@ DADOS DO PROFESSOR (perfil já salvo — não solicitar novamente):
 Escola: ${cab.escola || '(não informado)'}
 Cidade: ${cab.cidade || '(não informado)'}
 Professor(a): ${cab.prof || '(não informado)'}
-${contentBlock}
+${getTeacherStyleBlock()}${contentBlock}
 INSTRUÇÕES FINAIS:
 - NÃO inclua cabeçalho — o sistema gera automaticamente.
 - NUNCA use markdown: sem **, sem ##, sem ***, sem ---, sem >, sem backticks. Texto simples apenas.
@@ -5895,6 +6418,7 @@ function builderSyncFields() {
   st.numQ = Math.min(30, Math.max(3, n || 10));
   const nv = document.getElementById('nv');
   if (nv) nv.textContent = st.numQ;
+  builderFlowRefreshMetrics();
 }
 
 function builderLoadFields() {
@@ -5946,6 +6470,135 @@ function builderOnAdaptadaToggle() {
   scheduleSaveBuilder();
 }
 
+// ── ProfessorFlux — fluxo visual por etapas ─────────────────────────
+const PF_FLOW_STEPS = [
+  { n: 1, label: 'Dados', desc: 'Disciplina, série e quantidade' },
+  { n: 2, label: 'Material', desc: 'PDF, páginas e recortes' },
+  { n: 3, label: 'Cabeçalho', desc: 'Identidade da avaliação' },
+  { n: 4, label: 'Mídias', desc: 'Figuras e exercícios IA' },
+  { n: 5, label: 'Salvos', desc: 'Banco de exercícios' },
+  { n: 6, label: 'Montar', desc: 'Revisar e publicar' },
+];
+
+function builderFlowStepDone(step) {
+  switch (step) {
+    case 1:
+      return !!(v('bd-disc')?.trim() && v('bd-serie')?.trim());
+    case 2:
+      return !!st.builderPagesConfirmed;
+    case 3:
+      return !!(document.getElementById('bd-header')?.value);
+    case 4: {
+      const items = typeof builderListMidiaItems === 'function' ? builderListMidiaItems() : [];
+      if (!items.length) return st.builderFlowStep > 4;
+      return Object.values(st.builderMediaDrafts || {}).some((d) => d.reviewStatus === 'approved');
+    }
+    case 5:
+      return (st.builderSelectedExercises?.size || 0) > 0 || st.builderFlowStep > 5;
+    case 6:
+      return (st.builderPool || []).some((p) => builderPoolApproved(p));
+    default:
+      return false;
+  }
+}
+
+function builderFlowSuggestStep() {
+  if (!v('bd-disc')?.trim() || !v('bd-serie')?.trim()) return 1;
+  if (!st.builderPagesConfirmed) return 2;
+  const pool = st.builderPool || [];
+  if (pool.length) return 6;
+  return 3;
+}
+
+function builderFlowRefreshMetrics() {
+  const pagesEl = document.getElementById('pf-metric-pages');
+  const figsEl = document.getElementById('pf-metric-figs');
+  const qEl = document.getElementById('pf-metric-q');
+  if (pagesEl) {
+    let n = '—';
+    if (st.builderPagesConfirmed) {
+      n = v('bd-topicos')?.trim()
+        ? 'Texto'
+        : String(st.builderConfirmedPageList?.length || 0);
+    } else if (st.selectedPages?.size) n = String(st.selectedPages.size);
+    pagesEl.textContent = n;
+  }
+  if (figsEl) {
+    figsEl.textContent = String(
+      typeof builderListMidiaItems === 'function' ? builderListMidiaItems().length : 0,
+    );
+  }
+  if (qEl) qEl.textContent = String((st.builderPool || []).length);
+}
+
+function builderFlowGoTo(step, opts = {}) {
+  if (!document.getElementById('pf-flow-stage')) return;
+  const n = Math.max(1, Math.min(6, parseInt(String(step), 10) || 1));
+  st.builderFlowStep = n;
+  document.querySelectorAll('.pf-flow-step').forEach((el) => {
+    el.classList.toggle('is-active', parseInt(el.dataset.pfStep, 10) === n);
+  });
+  document.querySelectorAll('.pf-flow-node').forEach((el) => {
+    const s = parseInt(el.dataset.pfStep, 10);
+    el.classList.toggle('is-active', s === n);
+    el.classList.toggle('is-done', builderFlowStepDone(s) && s !== n);
+  });
+  document.querySelectorAll('.pf-journey-item').forEach((el) => {
+    const s = parseInt(el.dataset.pfStep, 10);
+    el.classList.toggle('is-active', s === n);
+    el.classList.toggle('is-done', builderFlowStepDone(s));
+  });
+  const meta = PF_FLOW_STEPS.find((s) => s.n === n) || PF_FLOW_STEPS[0];
+  const kicker = document.getElementById('pf-stage-kicker');
+  const title = document.getElementById('pf-stage-title');
+  const indicator = document.getElementById('pf-flow-indicator');
+  if (kicker) kicker.textContent = `Etapa ${n} de 6`;
+  if (title) title.textContent = meta.label;
+  if (indicator) indicator.textContent = `${n} / 6`;
+  const prev = document.getElementById('pf-flow-prev');
+  const next = document.getElementById('pf-flow-next');
+  if (prev) prev.disabled = n <= 1;
+  if (next) next.textContent = n >= 6 ? 'Ir para montagem ↓' : 'Próximo →';
+  const prog = document.getElementById('pf-journey-progress');
+  if (prog) prog.style.width = `${Math.round(((n - 1) / 5) * 100)}%`;
+  builderFlowRefreshMetrics();
+  if (!opts.silent) scheduleSaveBuilder();
+  if (!opts.noScroll) {
+    document.getElementById('pf-flow-stage')?.scrollTo?.({ top: 0, behavior: 'smooth' });
+  }
+}
+
+function builderFlowRefresh() {
+  builderFlowGoTo(st.builderFlowStep || builderFlowSuggestStep(), { silent: true, noScroll: true });
+}
+
+function builderFlowInit() {
+  if (!document.getElementById('pf-flow-stage')) return;
+  if (!st.builderFlowStep || st.builderFlowStep < 1) st.builderFlowStep = builderFlowSuggestStep();
+  builderFlowGoTo(st.builderFlowStep, { silent: true, noScroll: true });
+}
+
+function builderFlowNext() {
+  const n = st.builderFlowStep || 1;
+  if (n === 1 && (!v('bd-disc')?.trim() || !v('bd-serie')?.trim())) {
+    toast('Preencha disciplina e série para continuar.', 'err');
+    return;
+  }
+  if (n === 2 && !st.builderPagesConfirmed) {
+    toast('Confirme as páginas (ou conteúdo escrito) antes de avançar.', 'err', 5000);
+    return;
+  }
+  if (n >= 6) {
+    document.getElementById('bd-questoes-block')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
+  builderFlowGoTo(n + 1);
+}
+
+function builderFlowPrev() {
+  builderFlowGoTo(Math.max(1, (st.builderFlowStep || 1) - 1));
+}
+
 function builderUpdateQuestoesUI() {
   const gate = document.getElementById('bd-questoes-gate');
   const block = document.getElementById('bd-questoes-block');
@@ -5979,6 +6632,7 @@ function builderUpdateQuestoesUI() {
     }
   }
   builderRenderPool();
+  builderFlowRefresh();
 }
 
 async function ensureMaterialPdfLoaded() {
@@ -6013,6 +6667,7 @@ async function builderConfirmPages() {
     st.builderConfirmedPageList = [];
     builderUpdateQuestoesUI();
     toast('Conteúdo confirmado. Agora gere as questões.', 'ok');
+    builderFlowGoTo(6);
     return;
   }
   if (!st.selectedPages?.size) {
@@ -6049,8 +6704,8 @@ async function builderConfirmPages() {
   );
   if (sample.stats.withText === 0) {
     toast(
-      'Aviso: estas páginas não têm texto selecionável (PDF pode ser só imagem). Use "Ou conteúdo escrito" ou outras páginas.',
-      'err',
+      'PDF digitalizado detectado — sem texto copiável. A IA lerá as páginas por visão ao gerar questões.',
+      'ok',
       8000,
     );
   }
@@ -6060,6 +6715,7 @@ async function builderConfirmPages() {
   builderRenderBdCropGallery();
   scheduleSaveBuilder();
   toast(`${st.builderConfirmedPageList.length} página(s) confirmadas para extração.`, 'ok', 4000);
+  builderFlowGoTo(4);
 }
 
 function builderResetPagesConfirm() {
@@ -6157,31 +6813,30 @@ async function builderOnMaterialChange(materialId) {
   }
 }
 
-async function builderApplyPages() {
+async function builderApplyPagesWithRange(fromRaw, toRaw) {
+  if (!st.materialId) {
+    throw new Error('Selecione um PDF na biblioteca antes de marcar páginas.');
+  }
   if (st.materialId && !st.bookPdf) {
     try {
       await ensureMaterialPdfLoaded();
     } catch (e) {
-      toast(e.message || 'Erro ao carregar PDF', 'err', 6000);
-      return;
+      throw new Error(e.message || 'Erro ao carregar PDF');
     }
   }
   const max = getPdfPageMax();
   if (!max) {
-    toast('Selecione um material com PDF carregado.', 'err');
-    return;
+    throw new Error('PDF sem páginas. Envie o arquivo de novo ou escolha outro material.');
   }
-  const from = parseInt(v('bd-pag-from'), 10);
-  const to = parseInt(v('bd-pag-to'), 10);
-  if (!from || !to) {
-    toast('Informe página inicial e final.', 'err');
-    return;
+  const from = parseInt(String(fromRaw ?? ''), 10);
+  const to = parseInt(String(toRaw ?? ''), 10);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) {
+    throw new Error('Informe página inicial e final.');
   }
   const lo = Math.max(1, Math.min(from, to, max));
   const hi = Math.max(1, Math.min(Math.max(from, to), max));
   if (hi - lo > 40) {
-    toast('Máximo 40 páginas por vez.', 'err', 5000);
-    return;
+    throw new Error('Máximo 40 páginas por vez.');
   }
   st.selectedPages = new Set();
   for (let p = lo; p <= hi; p++) st.selectedPages.add(p);
@@ -6190,7 +6845,21 @@ async function builderApplyPages() {
   builderUpdateQuestoesUI();
   const cropSec = document.getElementById('bd-crop-section');
   if (cropSec && st.bookPdf) cropSec.style.display = '';
-  toast(`${hi - lo + 1} página(s) marcadas (PDF: 1–${max}) — confirme para liberar a IA.`, 'ok');
+  scheduleSaveBuilder();
+  return { count: hi - lo + 1, pages: [...st.selectedPages] };
+}
+
+async function builderApplyPages() {
+  const fromEl = document.getElementById('bd-pag-from');
+  const toEl = document.getElementById('bd-pag-to');
+  const from = fromEl?.value ?? v('bd-pag-from');
+  const to = toEl?.value ?? v('bd-pag-to');
+  try {
+    const result = await builderApplyPagesWithRange(from, to);
+    toast(`${result.count} página(s) marcadas (PDF: 1–${getPdfPageMax()}) — confirme para liberar a IA.`, 'ok');
+  } catch (e) {
+    toast(e.message || 'Erro ao marcar páginas', 'err', 5000);
+  }
 }
 
 async function builderOnHeaderChange(id) {
@@ -6247,7 +6916,7 @@ function builderMediaDraftHtml(imageId, draft, img) {
     return '<p class="bd-media-loading">Gerando exercício com a IA…</p>';
   }
   if (draft.reviewStatus === 'rejected') {
-    return '<p class="bd-media-rejected">Exercício rejeitado. Gere outro ou escolha outra mídia.</p>';
+    return '<p class="bd-media-rejected">Exercício rejeitado — gerando nova sugestão…</p>';
   }
   if (!draft.question?.statement) return '';
   const q = draft.question;
@@ -6307,8 +6976,11 @@ function builderSyncPoolFromSelections() {
 
   for (const imageId of Object.keys(st.builderMediaDrafts || {})) {
     const draft = st.builderMediaDrafts[imageId];
-    if (draft?.reviewStatus !== 'approved') continue;
-    const img = (st.cloudImageIndex || []).find((i) => i.imageId === imageId);
+    if (!draft?.question?.statement || draft.loading) continue;
+    const img =
+      getCloudImageEntry(imageId) ||
+      (st.imageCatalog || []).find((e) => e.imageId === imageId) ||
+      (st.cloudImageIndex || []).find((e) => e.imageId === imageId);
     if (!img) continue;
     const item = builderPoolItemFromMedia(img, draft);
     if (item && !pool.some((p) => p.id === item.id)) pool.push(item);
@@ -6369,24 +7041,48 @@ function builderPoolApproved(p) {
   return p.reviewStatus === 'approved' || (!p.reviewStatus && p.inProva);
 }
 
+function builderListMidiaItems() {
+  const pageSet = new Set([
+    ...(st.builderConfirmedPageList || []),
+    ...(st.selectedPages ? [...st.selectedPages] : []),
+  ]);
+  const seen = new Set();
+  const items = [];
+  const push = (e) => {
+    if (!e?.imageId || seen.has(e.imageId)) return;
+    seen.add(e.imageId);
+    items.push(getCloudImageEntry(e.imageId) || e);
+  };
+  for (const e of st.imageCatalog || []) {
+    if (!e.manualCrop && !e.recommendedForQuestion && !e.previewUrl && !e.dataUrl) continue;
+    const p = e.pageNumber || e.pageNum;
+    if (pageSet.size && p && !pageSet.has(p)) continue;
+    push(e);
+  }
+  for (const e of st.cloudImageIndex || []) push(e);
+  return items;
+}
+
 function builderRenderMidias() {
   const grid = document.getElementById('bd-midias-grid');
   const badge = document.getElementById('bd-midias-count');
   if (!grid) return;
-  const items = st.cloudImageIndex || [];
+  const items = builderListMidiaItems();
   const approvedN = Object.values(st.builderMediaDrafts || {}).filter((d) => d.reviewStatus === 'approved').length;
   if (badge) badge.textContent = items.length ? `${items.length} · ${approvedN} aprovada(s)` : '0';
   if (!items.length) {
-    grid.innerHTML = '<div class="bd-empty">Nenhuma mídia na nuvem. Adicione em Minhas mídias.</div>';
+    grid.innerHTML =
+      '<div class="bd-empty">Nenhuma figura ainda. Recorte no passo ② ou adicione em Minhas mídias.</div>';
     return;
   }
   grid.innerHTML = items
-    .slice(0, 48)
+    .slice(0, 64)
     .map((img) => {
       const draft = st.builderMediaDrafts?.[img.imageId];
-      const thumb = img.previewUrl || '';
+      const thumb = img.previewUrl || img.dataUrl || img.dataUri || '';
       const pid = escAttr(img.imageId);
-      const title = escHtml((img.title || img.caption || 'Figura').slice(0, 56));
+      const pageLbl = img.pageNumber || img.pageNum ? ` · p.${img.pageNumber || img.pageNum}` : '';
+      const title = escHtml(((img.title || img.caption || 'Figura') + pageLbl).slice(0, 56));
       const review = builderMediaDraftHtml(img.imageId, draft, img);
       const genDisabled = draft?.loading ? ' disabled' : '';
       return `
@@ -6402,6 +7098,48 @@ function builderRenderMidias() {
       </article>`;
     })
     .join('');
+}
+
+async function builderGenerateAllMediaExercises() {
+  builderSyncFields();
+  if (!v('bd-disc') && !v('f-disc')) {
+    toast('Preencha disciplina no passo ①.', 'err');
+    return;
+  }
+  const items = builderListMidiaItems().filter((img) => {
+    const draft = st.builderMediaDrafts?.[img.imageId];
+    return !draft?.loading && draft?.reviewStatus !== 'approved';
+  });
+  if (!items.length) {
+    toast('Nenhuma figura pendente — recorte no ② ou todas já foram aprovadas.', 'err', 5000);
+    return;
+  }
+  const btnAll = document.getElementById('bd-btn-gen-all-media');
+  const btnCrops = document.getElementById('bd-btn-gen-all-crops');
+  if (btnAll) { btnAll.disabled = true; btnAll.textContent = `Gerando 0/${items.length}…`; }
+  if (btnCrops) { btnCrops.disabled = true; btnCrops.textContent = `Gerando 0/${items.length}…`; }
+  let done = 0;
+  for (const img of items) {
+    try {
+      await builderGenerateMediaExercise(img.imageId);
+    } catch (e) {
+      console.warn('builderGenerateAllMediaExercises', img.imageId, e);
+    }
+    done += 1;
+    const lbl = `Gerando ${done}/${items.length}…`;
+    if (btnAll) btnAll.textContent = lbl;
+    if (btnCrops) btnCrops.textContent = lbl;
+  }
+  if (btnAll) {
+    btnAll.disabled = false;
+    btnAll.textContent = '✦ Gerar exercícios de todas as figuras';
+  }
+  if (btnCrops) {
+    btnCrops.disabled = false;
+    btnCrops.textContent = '✦ Gerar exercícios de todas as figuras recortadas';
+  }
+  toast(`${done} exercício(s) gerado(s) — aprove ou rejeite abaixo.`, 'ok', 6000);
+  document.getElementById('bd-midias-grid')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 async function builderGenerateMediaExercise(imageId) {
@@ -6428,7 +7166,7 @@ async function builderGenerateMediaExercise(imageId) {
       type: norm.type,
       blockId: block.blockId,
     };
-    toast('Exercício gerado — revise e aprove abaixo.', 'ok', 4500);
+    toast('Exercício gerado — revise e aprove no pool (passo Montar).', 'ok', 4500);
   } catch (e) {
     delete st.builderMediaDrafts[imageId];
     toast(humanizeIaApiError(e.message), 'err', 7000);
@@ -6464,10 +7202,9 @@ async function builderApproveMediaExercise(imageId) {
   toast('Exercício aprovado — revise na seção ⑥ para incluir na prova.', 'ok', 5000);
 }
 
-function builderRejectMediaExercise(imageId) {
-  if (st.builderMediaDrafts?.[imageId]) {
-    st.builderMediaDrafts[imageId].reviewStatus = 'rejected';
-  }
+async function builderRejectMediaExercise(imageId) {
+  delete st.builderMediaDrafts?.[imageId];
+  st.builderMediaDrafts = st.builderMediaDrafts || {};
   st.builderSelectedMedia.delete(imageId);
   st.builderPool = (st.builderPool || []).filter((p) => p.id !== `bmed-${imageId}`);
   const block = st.imageQuestionBlocks.find((b) => b.imageId === imageId);
@@ -6475,7 +7212,8 @@ function builderRejectMediaExercise(imageId) {
   builderRenderMidias();
   if (st.builderPagesConfirmed) builderRenderPool();
   scheduleSaveBuilder();
-  toast('Exercício rejeitado.', 'ok');
+  toast('Gerando nova sugestão…', 'ok');
+  await builderGenerateMediaExercise(imageId);
 }
 
 async function builderRegenerateMediaExercise(imageId) {
@@ -6521,6 +7259,25 @@ function builderRenderExercises() {
       </div>`;
     })
     .join('');
+}
+
+function builderToggleFigureSelection(imageId) {
+  if (!imageId) return;
+  st.builderFigureSelection = st.builderFigureSelection || new Set();
+  if (st.builderFigureSelection.has(imageId)) st.builderFigureSelection.delete(imageId);
+  else st.builderFigureSelection.add(imageId);
+  scheduleSaveBuilder();
+}
+
+function builderSelectAllFigures() {
+  const items = builderListMidiaItems();
+  st.builderFigureSelection = new Set(items.map((i) => i.imageId));
+  scheduleSaveBuilder();
+}
+
+function builderClearFigureSelection() {
+  st.builderFigureSelection = new Set();
+  scheduleSaveBuilder();
 }
 
 function builderToggleMedia(imageId) {
@@ -6707,22 +7464,33 @@ function builderToggleInProva(id, checked) {
 }
 
 async function builderGerarQuestoes() {
+  if (_gerarQuestoesLock) {
+    toast('Geração já em andamento…', 'ok', 2500);
+    return;
+  }
   if (!currentSession) { showView('auth'); return; }
   if (!st.builderPagesConfirmed) {
-    toast('Confirme as páginas do livro (passo ②) antes de gerar questões.', 'err', 6000);
-    return;
+    toast('Confirme as páginas do livro (passo Fonte) antes de gerar questões.', 'err', 6000);
+    throw new Error('Confirme o material antes de gerar.');
   }
   builderSyncFields();
   if (!v('bd-disc') || !v('bd-serie')) {
     toast('Preencha disciplina e série.', 'err');
-    return;
+    throw new Error('Preencha disciplina e série.');
+  }
+  _gerarQuestoesLock = true;
+  try {
+    await loadTeacherProfile();
+  } catch (e) {
+    console.warn('teacher profile gerar', e);
   }
   if (!v('bd-topicos').trim()) {
     try {
       await ensureMaterialPdfLoaded();
     } catch (e) {
+      _gerarQuestoesLock = false;
       toast(e.message || 'Erro ao carregar PDF', 'err', 6000);
-      return;
+      throw e;
     }
   }
   const count = builderQuestionCount();
@@ -6732,12 +7500,28 @@ async function builderGerarQuestoes() {
   if (btn) { btn.disabled = true; btn.textContent = 'Gerando…'; }
   if (poolEl) {
     poolEl.innerHTML =
-      '<div class="bd-empty">Extraindo páginas e gerando questões com a IA… Aguarde nesta tela.</div>';
+      '<div class="bd-empty">Extraindo páginas (incl. leitura por IA se digitalizado) e gerando questões… Aguarde.</div>';
   }
+  emitOperationProgress({
+    active: true,
+    operation: 'questions',
+    phase: 'start',
+    message: 'Preparando material e extraindo páginas…',
+    current: 0,
+    total: 0,
+    percent: 5,
+    startedAt: Date.now(),
+  });
   try {
     const keep = (st.builderPool || []).filter((p) => p.source !== 'ai');
     st.builderPool = keep;
 
+    emitOperationProgress({
+      operation: 'questions',
+      phase: 'questions',
+      message: 'IA analisando o material e criando questões…',
+      percent: 35,
+    });
     const turmaRes = await fetchQuestionSuggestions(count, false, {
       skipPendingStore: true,
       fromBuilder: true,
@@ -6750,6 +7534,12 @@ async function builderGerarQuestoes() {
         poolEl.innerHTML =
           '<div class="bd-empty">Gerando versão adaptada (PAEE)…</div>';
       }
+      emitOperationProgress({
+        operation: 'questions',
+        phase: 'adaptada',
+        message: 'Gerando versão adaptada (PAEE)…',
+        percent: 55,
+      });
       const adaptRes = await fetchQuestionSuggestions(count, false, {
         skipPendingStore: true,
         fromBuilder: true,
@@ -6771,13 +7561,62 @@ async function builderGerarQuestoes() {
       'ok',
       6000,
     );
+
+    const figureIds = [...(st.builderFigureSelection || [])];
+    if (figureIds.length) {
+      if (poolEl) {
+        poolEl.innerHTML =
+          '<div class="bd-empty">Analisando figuras selecionadas e gerando exercícios com IA…</div>';
+      }
+      emitOperationProgress({
+        operation: 'questions',
+        phase: 'figures',
+        message: 'Gerando exercícios a partir das figuras…',
+        current: 0,
+        total: figureIds.length,
+        percent: 70,
+      });
+      let figDone = 0;
+      for (const imageId of figureIds) {
+        try {
+          await builderGenerateMediaExercise(imageId);
+          figDone += 1;
+          const msg = `Figuras: ${figDone}/${figureIds.length} exercício(s) gerado(s)…`;
+          if (poolEl) poolEl.innerHTML = `<div class="bd-empty">${msg}</div>`;
+          emitOperationProgress({
+            operation: 'questions',
+            phase: 'figures',
+            message: msg,
+            current: figDone,
+            total: figureIds.length,
+            percent: 70 + Math.round((figDone / figureIds.length) * 25),
+          });
+        } catch (e) {
+          console.warn('builderGerarQuestoes figure', imageId, e);
+        }
+      }
+      builderSyncPoolFromSelections();
+      if (figDone) {
+        toast(
+          `${figDone} exercício(s) com figura adicionado(s) ao pool — revise e aprove abaixo.`,
+          'ok',
+          6000,
+        );
+      }
+    }
+
     builderSetPoolTab('turma');
     builderUpdateQuestoesUI();
+    builderFlowGoTo(6);
     scheduleSaveBuilder();
     document.getElementById('bd-questoes-block')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    clearOperationProgress();
   } catch (e) {
     toast('Erro: ' + e.message, 'err');
+    clearOperationProgress();
+    throw e;
   } finally {
+    _gerarQuestoesLock = false;
     if (btn) {
       btn.disabled = !st.builderPagesConfirmed;
       btn.textContent = '✦ Gerar questões do material';
@@ -6854,16 +7693,29 @@ async function builderMontarProva(variant) {
     }
     st.provaText = provaLines.join('\n\n');
     st.gabText = gabLines.join('\n');
-    document.getElementById('prova-text').value = st.provaText;
-    document.getElementById('gab-text').value = st.gabText;
-    document.getElementById('badge-saved').style.display = 'none';
+    const provaEl = document.getElementById('prova-text');
+    const gabEl = document.getElementById('gab-text');
+    if (provaEl) provaEl.value = st.provaText;
+    if (gabEl) gabEl.value = st.gabText;
+    const badgeSaved = document.getElementById('badge-saved');
+    if (badgeSaved) badgeSaved.style.display = 'none';
     st.currentProvaId = null;
     st.numQ = n - 1;
-    showView('result');
-    rTab('preview');
-    scheduleExamPreview();
-    renderExamVisualBuilder();
-    saveDraft();
+    if (_flowInlineResult) {
+      _flowInlineResult = false;
+      try {
+        window.dispatchEvent(new CustomEvent('pedagia:inline-result', { detail: { variant: vnt } }));
+      } catch {}
+      scheduleExamPreview();
+      renderExamVisualBuilder();
+      saveDraft();
+    } else {
+      showView('result');
+      rTab('preview');
+      scheduleExamPreview();
+      renderExamVisualBuilder();
+      saveDraft();
+    }
     const tipoLabel = vnt === 'adaptada' ? ' (adaptada)' : '';
     const saved = await saveProva(v('f-disc'), v('f-serie') + tipoLabel);
     if (!saved.ok) toast('Prova montada, mas não salva: ' + saved.error, 'err', 6000);
@@ -6893,6 +7745,11 @@ async function restoreMontarStateIfEmpty() {
 
 async function initBuilderView() {
   if (!currentSession) return;
+  try {
+    await loadTeacherProfile();
+  } catch (e) {
+    console.warn('teacher profile builder', e);
+  }
   builderLoadFields();
   try {
     await fetchMaterialsList();
@@ -6932,6 +7789,7 @@ async function initBuilderView() {
     const cropSec = document.getElementById('bd-crop-section');
     if (cropSec) cropSec.style.display = '';
   }
+  builderFlowInit();
 }
 
 // ══════════════════════════════════════════════
@@ -6956,7 +7814,29 @@ async function buildBuilderExamContentBlock() {
     );
   }
   st.builderConfirmedPageList = pages;
-  const { text: pagesText, stats } = await extractTextFromPdfPages(st.bookPdf, pages);
+  const showVisionProgress = (done, total) => {
+    const msg = `Lendo ${done}/${total} página(s) com IA (PDF digitalizado)…`;
+    const poolEl = document.getElementById('bd-pool');
+    if (poolEl) poolEl.innerHTML = `<div class="bd-empty">${msg} Aguarde.</div>`;
+    emitOperationProgress({
+      operation: 'questions',
+      phase: 'vision',
+      message: msg,
+      current: done,
+      total,
+      percent: total ? Math.min(30, Math.round((done / total) * 30)) : 10,
+    });
+  };
+  emitOperationProgress({
+    operation: 'questions',
+    phase: 'extract',
+    message: 'Extraindo texto das páginas confirmadas…',
+    percent: 12,
+  });
+  const { text: pagesText, stats } = await extractTextFromPdfPages(st.bookPdf, pages, {
+    allowVision: true,
+    onVisionProgress: showVisionProgress,
+  });
   const bookSources = extractSources(pagesText);
   const sourceBlock = bookSources.length
     ? `\nFONTES ORIGINAIS DO MATERIAL (cite EXATAMENTE assim — NUNCA use o nome do arquivo):\n${bookSources.map((s) => '• ' + s).join('\n')}\n`
@@ -6973,6 +7853,12 @@ async function buildBuilderExamContentBlock() {
     chapterTitle: chTitle,
     pagesText,
     pages,
+  });
+  emitOperationProgress({
+    operation: 'questions',
+    phase: 'analyze',
+    message: 'Analisando capítulo e preparando contexto para a IA…',
+    percent: 28,
   });
   const core = getCore();
   if (core?.buildChapterContentBlock) {
@@ -7241,6 +8127,7 @@ async function fetchQuestionSuggestions(count, append, opts = {}) {
       bnccPrefs: getBnccPrefsFromUI(),
       adapted: !!opts.adapted,
       adaptationNotes: opts.adaptationNotes || '',
+      teacherStyleBlock: getTeacherStyleBlock(),
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -7444,13 +8331,7 @@ async function buildProvaPayload(disc, serie) {
   st.gabText   = gabText;
   const qCount = (provaText.match(/^\d+\./gm) || []).length || st.numQ;
 
-  let builder_snapshot = null;
-  if (cloudReady() && st.bookFileName) {
-    try {
-      builder_snapshot = await PedagiaCloud.saveBuilderState(collectBuilderSnapshot());
-    } catch (e) { console.warn('builder_snapshot:', e); }
-  }
-
+  // Estado do builder persiste via saveBuilderToStorage — não enviar snapshot pesado (base64) na linha da prova.
   const exam = buildStateExamModel();
 
   return {
@@ -7465,9 +8346,30 @@ async function buildProvaPayload(disc, serie) {
     escola: cab.escola || '',
     professor: cab.prof || '',
     cabecalho: cab,
-    builder_snapshot,
     exam_model: exam || st.examModel,
   };
+}
+
+function slimProvaPayload(body, level) {
+  if (level === 0) return body;
+  const slim = { ...body };
+  if (level >= 1) delete slim.exam_model;
+  if (level >= 2) delete slim.cabecalho;
+  if (level >= 3) {
+    return {
+      disciplina: slim.disciplina,
+      serie: slim.serie,
+      conteudo: slim.conteudo,
+      tipo: slim.tipo,
+      dificuldade: slim.dificuldade,
+      num_questoes: slim.num_questoes,
+      prova_text: slim.prova_text,
+      gabarito_text: slim.gabarito_text,
+      escola: slim.escola,
+      professor: slim.professor,
+    };
+  }
+  return slim;
 }
 
 async function saveProva(disc, serie) {
@@ -7480,40 +8382,47 @@ async function saveProva(disc, serie) {
     return { ok: false, error: 'Não há texto da prova para salvar.' };
   }
 
-  try {
-    const isUpdate = !!st.currentProvaId;
-    const url = isUpdate ? `/api/provas/${st.currentProvaId}` : '/api/provas';
-    let body = payload;
-    let r = await fetch(url, {
-      method: isUpdate ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
-    });
-    let data = await r.json().catch(() => ({}));
-    const errMsg = String(data.error || '');
-    if (!r.ok && body.exam_model && /exam_model/i.test(errMsg)) {
-      const { exam_model, ...rest } = body;
-      body = rest;
-      r = await fetch(url, {
-        method: isUpdate ? 'PUT' : 'POST',
+  const isUpdate = !!st.currentProvaId;
+  const url = isUpdate ? `/api/provas/${st.currentProvaId}` : '/api/provas';
+  const method = isUpdate ? 'PUT' : 'POST';
+  let lastErr = 'Erro ao salvar';
+
+  for (let level = 0; level <= 3; level++) {
+    const body = slimProvaPayload(payload, level);
+    try {
+      const r = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(body),
       });
-      data = await r.json().catch(() => ({}));
-      console.warn('exam_model: coluna ausente no Supabase — rode schema.sql (ALTER exam_model). Prova salva sem ExamModel.');
+      const data = await r.json().catch(() => ({}));
+      if (r.ok) {
+        st.currentProvaId = data.id || st.currentProvaId;
+        const badge = document.getElementById('badge-saved');
+        if (badge) badge.style.display = '';
+        saveDraft();
+        await loadHistory();
+        if (level > 0) {
+          console.warn(`saveProva: salvo com payload reduzido (nível ${level}).`);
+        }
+        return { ok: true };
+      }
+      lastErr = data.error || `Erro ao salvar (${r.status})`;
+      const retryable =
+        r.status === 413 ||
+        r.status === 500 ||
+        /exam_model|builder_snapshot|cabecalho|column|payload|too large|size/i.test(String(data.error || ''));
+      if (!retryable || level >= 3) break;
+    } catch (e) {
+      lastErr = e.message || 'Erro desconhecido';
+      break;
     }
-    if (!r.ok) throw new Error(data.error || `Erro ao salvar (${r.status})`);
-
-    st.currentProvaId = data.id || st.currentProvaId;
-    document.getElementById('badge-saved').style.display = '';
-    saveDraft();
-    await loadHistory();
-    return { ok: true };
-  } catch (e) {
-    console.error('saveProva:', e);
-    document.getElementById('badge-saved').style.display = 'none';
-    return { ok: false, error: e.message || 'Erro desconhecido' };
   }
+
+  const badge = document.getElementById('badge-saved');
+  if (badge) badge.style.display = 'none';
+  console.warn('saveProva:', lastErr);
+  return { ok: false, error: lastErr };
 }
 
 async function saveProvaManual() {
@@ -9391,13 +10300,19 @@ function attachPedagiaGlobals() {
     setReviewFilter, approveReviewQuestion, rejectReviewQuestion, undoReviewQuestion,
     moveReviewQuestion, selecionarIntervaloPaginas,
     initBuilderView, builderSyncFields, builderChNumQ, builderOnMaterialChange,
-    builderApplyPages, builderOnHeaderChange, builderToggleMedia, builderToggleExercise,
+    builderToggleFigureSelection, builderSelectAllFigures, builderClearFigureSelection,
+    builderToggleMedia, builderToggleExercise,
     builderGenerateMediaExercise, builderApproveMediaExercise, builderRejectMediaExercise,
-    builderRegenerateMediaExercise, builderSetMediaDraftType,
-    builderTogglePage, builderConfirmPages, builderResetPagesConfirm, builderOnTopicosInput,
-    builderOnAdaptadaToggle, builderSetPoolTab, builderGerarQuestoes, builderMontarProva,
+    builderRegenerateMediaExercise, builderSetMediaDraftType, builderGenerateAllMediaExercises,
+    builderTogglePage, builderApplyPages, builderApplyPagesWithRange,
+    builderConfirmPages, builderResetPagesConfirm, builderOnTopicosInput,
+    builderOnAdaptadaToggle, builderSetPoolTab, builderGerarQuestoes, builderMontarProva, builderSetInlineResult,
     builderApprovePoolItem, builderRejectPoolItem, builderUndoPoolItem, builderSetPoolItemType,
     builderLoadCropPages, builderToggleInProva,
+    builderFlowGenerateAndSaveImage, builderFlowUploadPdf, builderFlowRefreshMaterials,
+    builderFlowSaveManualHeader, saveBuilderManual, setFlowTitle, resumeBuilderFlow,
+    builderFlowGoTo, builderFlowNext, builderFlowPrev,
+    resumeDraftProva, loadTeacherProfile,
     saveProvaManual,
     goTo, showView, rTab, saveCab,
     setHtab, setSrc, setDif, updateDist,
@@ -9423,6 +10338,7 @@ function attachPedagiaGlobals() {
     onBnccPrefsChange, moveExamPlanItem, toggleExamPlanBlock,
     evbSetFilter, evbSelectAllBlocks, evbClearAllBlocks, evbSuggestOrder,
     toast,
+    getLegacyFlowSnapshot, pushFlowStoreToLegacy, refreshLegacyBuilderUi,
   });
 }
 
@@ -9441,6 +10357,139 @@ export function reconcilePedagiaSessionUi() {
 }
 
 let _bootPromise = null;
+
+/** Snapshot para Zustand / Flow Builder (Strangler Fig). */
+export function getLegacyFlowSnapshot() {
+  builderSyncFields();
+  return {
+    materialId: st.materialId || null,
+    bookFileName: st.bookFileName || '',
+    bookTotalPages: st.bookTotalPages || 0,
+    builderPagesConfirmed: !!st.builderPagesConfirmed,
+    confirmedPageList: [...(st.builderConfirmedPageList || [])],
+    selectedPages: st.selectedPages instanceof Set ? [...st.selectedPages] : [...(st.selectedPages || [])],
+    builderPool: JSON.parse(JSON.stringify(st.builderPool || [])),
+    builderPoolTab: st.builderPoolTab || 'turma',
+    builderWantAdapted: !!st.builderWantAdapted,
+    materialsList: (st.materialsList || []).map((m) => ({
+      id: m.id,
+      fileName: m.fileName || 'Material',
+      totalPages: m.totalPages || 0,
+    })),
+    headers: (st.headersIndex?.items || []).map((h) => ({ id: h.id, name: h.name })),
+    activeHeaderId: st.activeHeaderId || null,
+    mediaDrafts: JSON.parse(JSON.stringify(st.builderMediaDrafts || {})),
+    imageCatalog: (st.imageCatalog || [])
+      .filter((e) => e.manualCrop || e.recommendedForQuestion || e.previewUrl || e.dataUrl)
+      .map((e) => ({
+        imageId: e.imageId,
+        previewUrl: e.previewUrl || e.dataUrl || '',
+        pageNumber: e.pageNumber || e.pageNum,
+        title: e.title || e.caption || 'Figura',
+      })),
+    mediaItems: builderListMidiaItems().map((e) => ({
+      imageId: e.imageId,
+      previewUrl: e.previewUrl || e.dataUrl || e.dataUri || '',
+      pageNumber: e.pageNumber || e.pageNum,
+      title: e.title || e.caption || 'Figura',
+    })),
+    selectedFigures: [...(st.builderFigureSelection || [])],
+    exerciciosCount: (st.exerciciosData || []).length,
+    pagFrom: document.getElementById('bd-pag-from')?.value || '',
+    pagTo: document.getElementById('bd-pag-to')?.value || '',
+    flowTitle: st.flowTitle || '',
+    flowSavedAt: st.flowSavedAt || null,
+    exam: {
+      disciplina: v('bd-disc') || v('f-disc') || '',
+      serie: v('bd-serie') || v('f-serie') || '',
+      tipo: v('bd-tipo') || v('f-tipo') || 'Prova',
+      valor: v('bd-valor') || v('f-valor') || '10,0',
+      numQ: st.numQ || 10,
+      wantAdapted: !!st.builderWantAdapted,
+      adaptNotes: document.getElementById('bd-adapt-notas')?.value || '',
+      topicos: v('bd-topicos') || '',
+      productionKind: st.productionKind || 'prova',
+    },
+  };
+}
+
+/** Espelha campos do Flow Store nos inputs legados bd-* / f-*. */
+export function pushFlowStoreToLegacy(partial) {
+  const exam = partial?.exam;
+  if (!exam || typeof exam !== 'object') return;
+  const setVal = (id, val) => {
+    if (val == null) return;
+    const el = document.getElementById(id);
+    if (el) el.value = String(val);
+  };
+  if (exam.disciplina != null) {
+    setVal('bd-disc', exam.disciplina);
+    setVal('f-disc', exam.disciplina);
+  }
+  if (exam.serie != null) {
+    setVal('bd-serie', exam.serie);
+    setVal('f-serie', exam.serie);
+  }
+  if (exam.tipo != null) {
+    setVal('bd-tipo', exam.tipo);
+    setVal('f-tipo', exam.tipo);
+  }
+  if (exam.valor != null) {
+    setVal('bd-valor', exam.valor);
+    setVal('f-valor', exam.valor);
+  }
+  if (exam.topicos != null) setVal('bd-topicos', exam.topicos);
+  if (exam.adaptNotes != null) setVal('bd-adapt-notas', exam.adaptNotes);
+  if (exam.productionKind != null) {
+    st.productionKind = exam.productionKind;
+    const labels = {
+      prova: 'Prova',
+      atividade: 'Atividade',
+      avaliacao: 'Avaliação',
+      leitura: 'Texto de leitura',
+      imagem: 'Material visual',
+    };
+    const tipoLabel = labels[exam.productionKind] || exam.tipo;
+    if (tipoLabel) {
+      setVal('bd-tipo', tipoLabel);
+      setVal('f-tipo', tipoLabel);
+    }
+  }
+  if (exam.numQ != null) {
+    st.numQ = Math.min(30, Math.max(3, parseInt(String(exam.numQ), 10) || 10));
+    const bdN = document.getElementById('bd-numq');
+    if (bdN) bdN.textContent = String(st.numQ);
+    const nv = document.getElementById('nv');
+    if (nv) nv.textContent = String(st.numQ);
+  }
+  if (exam.wantAdapted != null) {
+    st.builderWantAdapted = !!exam.wantAdapted;
+    const cb = document.getElementById('bd-adaptada');
+    if (cb) cb.checked = st.builderWantAdapted;
+    builderOnAdaptadaToggle();
+  }
+  builderSyncFields();
+}
+
+/** Re-renderiza UI legada do Montar (para embed no Flow modal). */
+export function refreshLegacyBuilderUi(scope) {
+  const s = scope || 'all';
+  if (s === 'material' || s === 'all') {
+    builderRenderMaterialSelect();
+    builderRenderPageChips();
+    builderRenderBdCropGallery();
+    void fetchMaterialsList().then(() => renderMaterialLibrary()).catch(() => renderMaterialLibrary());
+  }
+  if (s === 'header' || s === 'all') {
+    builderRenderHeaderSelect();
+    builderRenderExercises();
+  }
+  if (s === 'media' || s === 'all') builderRenderMidias();
+  if (s === 'output' || s === 'all') {
+    builderUpdateQuestoesUI();
+    builderRenderPool();
+  }
+}
 
 export async function bootPedagiaLegacy() {
   if (!_bootPromise) {

@@ -32,6 +32,7 @@ export async function POST(req: Request) {
     bnccPrefs: body.bnccPrefs,
     adapted: !!body.adapted,
     adaptationNotes: typeof body.adaptationNotes === 'string' ? body.adaptationNotes : '',
+    teacherStyleBlock: typeof body.teacherStyleBlock === 'string' ? body.teacherStyleBlock : '',
   });
 
   try {
